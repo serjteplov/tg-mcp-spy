@@ -44,4 +44,4 @@ repos:
             entry: .venv/bin/pytest
             language: system
             pass_filenames: false
-            args: [-q, tests/test_smoke.py]
+            args: [-q]

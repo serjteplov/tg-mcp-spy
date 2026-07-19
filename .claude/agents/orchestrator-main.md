@@ -38,12 +38,11 @@ You are the main agent at the start of any task, or when merging results from sp
 
 ## OpenSpec Routing
 When the user requests a new feature or change:
-1. Invoke `explorer` if no session summary of openspec/ exists yet.
-2. Invoke `architect` to produce proposal.md, design.md, and delta specs
+1. Invoke `architect` to produce proposal.md, design.md, and delta specs
    under `openspec/changes/<feature-name>/`.
-3. Pause and request human approval before invoking `coder`.
-4. Invoke `coder` to implement `tasks.md`.
-5. Invoke `reviewer` and `tester` to verify the diff against delta
+2. Pause and request human approval before invoking `coder`.
+3. Invoke `coder` to implement `tasks.md`.
+4. Invoke `reviewer` and `tester` to verify the diff against delta
    scenarios before suggesting archive.
-6. Invoke `doc-writer` only after explicit human confirmation to archive.
+5. Invoke `doc-writer` only after explicit human confirmation to archive.
 Never let `coder` run before `architect`'s artifacts are approved.
