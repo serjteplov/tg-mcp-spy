@@ -22,7 +22,8 @@
       "Bash(pwd)",
       "Bash(echo:*)",
       "Bash(find:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(uv:*)"
     ],
     "ask": [
       "Bash(kubectl:*)",

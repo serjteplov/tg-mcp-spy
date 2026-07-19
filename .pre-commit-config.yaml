@@ -1,0 +1,47 @@
+default_language_version:
+    python: python3.12
+
+repos:
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v4.6.0
+      hooks:
+          - id: trailing-whitespace
+          - id: end-of-file-fixer
+          - id: check-yaml
+          - id: check-toml
+          - id: check-json
+          - id: check-added-large-files
+          - id: debug-statements
+
+    - repo: https://github.com/astral-sh/ruff-pre-commit
+      rev: v0.15.16
+      hooks:
+          - id: ruff
+            args: [--fix]
+          - id: ruff-format
+
+    - repo: local
+      hooks:
+          - id: mypy
+            name: mypy
+            entry: .venv/bin/mypy
+            language: system
+            pass_filenames: false
+            args: [src, tests]
+          - id: format-and-check
+            name: format-and-check
+            entry: .claude/hooks/format-and-check.sh
+            language: script
+            pass_filenames: false
+            always_run: true
+          - id: block-dangerous-commands
+            name: Block Dangerous Commands
+            entry: .claude/hooks/block-dangerous-commands.sh
+            language: script
+            files: \.py$
+          - id: pytest-smoke
+            name: pytest-smoke
+            entry: .venv/bin/pytest
+            language: system
+            pass_filenames: false
+            args: [-q, tests/test_smoke.py]

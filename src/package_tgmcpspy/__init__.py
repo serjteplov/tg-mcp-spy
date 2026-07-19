@@ -1,0 +1,1 @@
+"""tg-mcp-spy package."""
