@@ -1,0 +1,129 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(*)",
+      "Grep(*)",
+      "Glob(*)",
+      "Bash(make test:*)",
+      "Bash(make lint:*)",
+      "Bash(make typecheck:*)",
+      "Bash(make format:*)",
+      "Bash(make check:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run *)",
+      "Bash(pytest:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(pwd)",
+      "Bash(echo:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)"
+    ],
+    "ask": [
+      "Bash(kubectl:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": [
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | bash)",
+      "Bash(chmod 777:*)",
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Edit(~/.ssh/*)",
+      "Edit(.env*)",
+      "Read(.env*)",
+      "Read(*.pem)",
+      "Read(credentials.*)",
+      "Read(**/id_rsa*)",
+      "Edit(~/.ssh/**)",
+      "Edit(../**)",
+      "Write(/etc/**)"
+    ]
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "idle_prompt|permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "notify-send 'Claude Code' 'Нужно твое внимание'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/inject-git-context.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-dangerous-commands.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/git-push-reminder.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format-and-check.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/log-stop.sh",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

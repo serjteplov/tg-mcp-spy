@@ -1,0 +1,16 @@
+[project]
+name = "tg-mcp-spy"
+version = "0.1.0"
+description = "Telegram MCP Spy"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.28.1",
+    "uvicorn>=0.30.0",
+]
+
+[tool.uv]
+package = true
+
+[project.scripts]
+tg-mcp-spy = "package_tgmcpspy.server:main"
