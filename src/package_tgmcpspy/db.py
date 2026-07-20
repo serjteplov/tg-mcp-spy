@@ -16,6 +16,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    UniqueConstraint,
     and_,
     func,
     select,
@@ -51,6 +52,7 @@ posts_table = Table(
     Column("telegram_message_id", Integer, nullable=False),
     Column("text", String, nullable=False, default=""),
     Column("timestamp_utc", String, nullable=False),
+    UniqueConstraint("channel_id", "telegram_message_id"),
     Index("ix_posts_channel_timestamp", "channel_id", "timestamp_utc"),
     Index("ix_posts_timestamp", "timestamp_utc"),
 )
@@ -71,25 +73,31 @@ def _parse_timestamp(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _row_to_channel(row: tuple[Any, ...]) -> Channel:
+def _row_to_channel(row: Any) -> Channel:
+    m = row._mapping
     return Channel(
-        id=int(row[0]),
-        telegram_id=int(row[1]),
-        username=row[2] if row[2] is not None else None,
-        title=str(row[3]),
-        is_tracked=bool(row[4]),
-        last_message_id=int(row[5]) if row[5] is not None else None,
-        last_fetched_at=_parse_timestamp(str(row[6])) if row[6] is not None else None,
+        id=int(m["id"]),
+        telegram_id=int(m["telegram_id"]),
+        username=m["username"],
+        title=str(m["title"]),
+        is_tracked=bool(m["is_tracked"]),
+        last_message_id=int(m["last_message_id"]) if m["last_message_id"] is not None else None,
+        last_fetched_at=(
+            _parse_timestamp(str(m["last_fetched_at"]))
+            if m["last_fetched_at"] is not None
+            else None
+        ),
     )
 
 
-def _row_to_post(row: tuple[Any, ...]) -> Post:
+def _row_to_post(row: Any) -> Post:
+    m = row._mapping
     return Post(
-        id=int(row[0]),
-        channel_id=int(row[1]),
-        telegram_message_id=int(row[2]),
-        text=str(row[3]),
-        timestamp_utc=_parse_timestamp(str(row[4])),
+        id=int(m["id"]),
+        channel_id=int(m["channel_id"]),
+        telegram_message_id=int(m["telegram_message_id"]),
+        text=str(m["text"]),
+        timestamp_utc=_parse_timestamp(str(m["timestamp_utc"])),
     )
 
 
@@ -112,7 +120,7 @@ class _SyncRepository:
             ).first()
 
             if existing is not None:
-                channel_id = int(existing[0])
+                channel_id = int(existing._mapping["id"])
                 conn.execute(
                     channels_table.update()
                     .where(channels_table.c.id == channel_id)
@@ -139,20 +147,20 @@ class _SyncRepository:
             ).first()
             if row is None:
                 raise RuntimeError("Inserted channel disappeared immediately")
-            return _row_to_channel(tuple(row))
+            return _row_to_channel(row)
 
     def _get_channel_by_id(self, conn: Connection, channel_id: int) -> Channel:
         row = conn.execute(select(channels_table).where(channels_table.c.id == channel_id)).first()
         if row is None:
             raise RuntimeError(f"Channel {channel_id} disappeared during upsert")
-        return _row_to_channel(tuple(row))
+        return _row_to_channel(row)
 
     def list_tracked_channels(self) -> list[Channel]:
         with self._engine.begin() as conn:
             rows = conn.execute(
                 select(channels_table).where(channels_table.c.is_tracked.is_(True))
             ).all()
-            return [_row_to_channel(tuple(row)) for row in rows]
+            return [_row_to_channel(row) for row in rows]
 
     def set_tracked(self, telegram_id: int, tracked: bool) -> Channel | None:
         """Update the tracked flag for a channel and return the record, or None if absent."""
@@ -163,7 +171,7 @@ class _SyncRepository:
             if existing is None:
                 return None
 
-            channel_id = int(existing[0])
+            channel_id = int(existing._mapping["id"])
             conn.execute(
                 channels_table.update()
                 .where(channels_table.c.id == channel_id)
@@ -176,14 +184,14 @@ class _SyncRepository:
             row = conn.execute(
                 select(channels_table).where(channels_table.c.telegram_id == telegram_id)
             ).first()
-            return _row_to_channel(tuple(row)) if row is not None else None
+            return _row_to_channel(row) if row is not None else None
 
     def get_channel_by_username(self, username: str) -> Channel | None:
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(channels_table).where(channels_table.c.username == username)
             ).first()
-            return _row_to_channel(tuple(row)) if row is not None else None
+            return _row_to_channel(row) if row is not None else None
 
     def upsert_posts(self, channel_id: int, messages: Sequence[MessageInfo]) -> int:
         """Insert new messages for a channel; ignore duplicates. Returns inserted count."""
@@ -192,7 +200,7 @@ class _SyncRepository:
 
         with self._engine.begin() as conn:
             existing = {
-                row[0]
+                row._mapping["telegram_message_id"]
                 for row in conn.execute(
                     select(posts_table.c.telegram_message_id).where(
                         posts_table.c.channel_id == channel_id
@@ -244,7 +252,7 @@ class _SyncRepository:
                     )
                 )
             ).first()
-            return _row_to_post(tuple(row)) if row is not None else None
+            return _row_to_post(row) if row is not None else None
 
     def list_channel_posts(
         self,
@@ -262,7 +270,7 @@ class _SyncRepository:
                 .where(posts_table.c.timestamp_utc <= end_str)
                 .order_by(posts_table.c.timestamp_utc)
             ).all()
-            return [_row_to_post(tuple(row)) for row in rows]
+            return [_row_to_post(row) for row in rows]
 
     def list_all_posts(self, start: datetime, end: datetime) -> list[Post]:
         start_str = _format_timestamp(start)
@@ -274,14 +282,31 @@ class _SyncRepository:
                 .where(posts_table.c.timestamp_utc <= end_str)
                 .order_by(posts_table.c.timestamp_utc)
             ).all()
-            return [_row_to_post(tuple(row)) for row in rows]
+            return [_row_to_post(row) for row in rows]
 
     def purge_old_posts(self, cutoff: datetime) -> int:
-        """Delete posts older than the cutoff and return the number deleted."""
+        """Delete posts older than the cutoff across all channels and return the number deleted."""
         cutoff_str = _format_timestamp(cutoff)
         with self._engine.begin() as conn:
             result = conn.execute(
                 posts_table.delete().where(posts_table.c.timestamp_utc < cutoff_str)
+            )
+            return int(result.rowcount)
+
+    def purge_old_posts_for_channel(self, channel_id: int, cutoff: datetime) -> int:
+        """Delete posts older than the cutoff for a specific channel.
+
+        Returns the number of deleted posts.
+        """
+        cutoff_str = _format_timestamp(cutoff)
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                posts_table.delete().where(
+                    and_(
+                        posts_table.c.channel_id == channel_id,
+                        posts_table.c.timestamp_utc < cutoff_str,
+                    )
+                )
             )
             return int(result.rowcount)
 
@@ -366,6 +391,9 @@ class Repository:
 
     async def purge_old_posts(self, cutoff: datetime) -> int:
         return await asyncio.to_thread(self._sync.purge_old_posts, cutoff)
+
+    async def purge_old_posts_for_channel(self, channel_id: int, cutoff: datetime) -> int:
+        return await asyncio.to_thread(self._sync.purge_old_posts_for_channel, channel_id, cutoff)
 
     async def oldest_post_timestamp(self, channel_id: int) -> datetime | None:
         return await asyncio.to_thread(self._sync.oldest_post_timestamp, channel_id)

@@ -1,18 +1,16 @@
 # Project Context
 
-Global context for the Cashback project. Keep this file concise and up to date.
-
 ## Overview
 
-Cashback is a Python CLI application that recommends which cashback categories to select on debit cards across multiple banks in order to maximize a weighted total cashback score.
+tg-mcp-spy is a Python MCP (Model Context Protocol) server that caches Telegram channel posts in a local SQLite database and exposes them via MCP tools. It connects to Telegram through a user session (Telethon) and mirrors the user's broadcast-channel subscriptions into a queryable local cache.
 
 ## Tech stack
 
-- **Language**: Python 3.13+
-- **Package manager**: pip (venv-based; Makefile uses `.venv/bin/pip`)
-- **Code style**: ruff + mypy
-- **Testing**: pytest + hypothesis
-- **Build backend**: setuptools
+- **Language**: Python 3.12+
+- **Package manager**: uv
+- **Code style**: ruff + mypy (strict)
+- **Testing**: pytest + pytest-asyncio
+- **Build backend**: setuptools (via uv)
 
 ## Commands
 
@@ -24,58 +22,77 @@ Cashback is a Python CLI application that recommends which cashback categories t
 
 ## Domain
 
-- **Bank**: a financial institution where the user holds a debit card.
-- **Category**: a spending category (e.g., groceries, fuel) with a Russian name, English alias, description, and weight.
-- **Offering**: a cashback percentage offered by a specific bank for a specific category.
-- **User config**: the user’s banks, each with its category limit and offerings.
-- **Optimization result**: the recommended category selection per bank, total weighted score, and any unassigned categories.
-- **History**: persisted record of past optimization runs.
+- **Channel**: a Telegram broadcast channel the user is subscribed to or has manually added.
+- **Tracked channel**: a channel marked for local caching (`is_tracked=True`).
+- **Post**: a cached message from a tracked channel, containing Telegram message id, channel reference, UTC timestamp, and text.
+- **Sync**: mirroring the user's Telegram dialog list into the local cache (`sync_dialogs`).
+- **Update**: fetching new posts for a channel since the last cached message (`update_channel`, `update_all_channels`).
 
 ## Architecture
 
-- `src/package_cashback/` — application package.
-  - `models.py` — domain dataclasses.
-  - `config.py` — config loading and validation.
-  - `optimizer.py` — branch-and-bound solver.
-  - `formatters.py` — table and JSON output.
-  - `history.py` — history persistence.
-  - `wizard.py` — interactive config wizard.
-  - `__main__.py` — CLI entry point.
-- `tests/` — pytest suite.
-- `openspec/` — product specs and implementation plans.
+```
+src/package_tgmcpspy/
+  models.py      — domain dataclasses (Channel, Post, ChannelInfo, MessageInfo),
+                   domain exceptions (ConfigError, ChannelNotFoundError, TelegramError),
+                   shared identifier normalization (normalize_identifier)
+  config.py      — AppConfig dataclass + env-var loading and validation
+  db.py          — SQLAlchemy Core table definitions, _SyncRepository,
+                   async Repository facade (asyncio.to_thread), init_schema
+  telegram.py    — Telethon wrapper (TelegramClientWrapper),
+                   FloodWait retry decorator, dialog/message fetching
+  server.py      — FastMCP application, lifespan, MCP tools, resources, prompts
+```
+
+### Dependency direction
+
+- `models.py` has no internal imports (pure domain).
+- `config.py` imports from `models` (ConfigError only).
+- `db.py` imports from `models` (dataclasses).
+- `telegram.py` imports from `config` and `models`.
+- `server.py` imports from `config`, `db`, `models`, and `telegram`.
+
+### Key design decisions
+
+- **SQLAlchemy Core + sync SQLite + `asyncio.to_thread`** (no aiosqlite) — one fewer dependency; simpler typing.
+- **Sequential MCP tool processing** — no concurrent Telegram or DB operations; simplifies ordering and rate-limit handling.
+- **Immutable cached posts** — edits and deletions on Telegram are ignored; `upsert_posts` only inserts new rows.
+- **Per-channel TTL purge** — posts older than a configurable TTL (default 90 days) are purged per-channel at the start of `update_channel`.
+- **Domain exceptions raised from tools** — `ConfigError`, `ChannelNotFoundError`, `TelegramError`; FastMCP converts these to MCP error responses. No `{ok, error}` envelopes.
+- **No MCP notifications** — pure request/response; no resource subscriptions or events.
 
 ## System boundaries
 
 ### In scope
 
-- Recommend which cashback categories to select on the user’s debit cards.
-- Support multiple banks, each with its own category limit and offerings.
-- Optimize a weighted total cashback score based on user-supplied category weights.
-- Load user configuration from local JSON files and validate it.
-- Persist optimization history to a local append-only JSON file.
-- Provide a CLI with human-readable table output and machine-readable JSON report.
-- Offer an interactive wizard for building or editing a user config.
+- Mirror Telegram broadcast-channel subscriptions into a local cache.
+- Fetch and cache channel posts via the Telegram user-session API.
+- Expose channel/post operations as MCP tools so clients can list channels, refresh data, and read posts by id or date range.
+- Add/remove channels from the local tracked list (does not subscribe/unsubscribe on Telegram).
+- Read-only MCP resources for channel lists and single posts.
+- Prompt template for channel digests.
 
 ### Out of scope
 
-- Credit cards, credit limits, or lending products.
-- Real-time bank integrations, account balances, or transaction feeds.
-- Actual payment processing, money transfers, or card management.
-- Authentication, authorization, or multi-user accounts.
-- Cloud sync, remote storage, or hosted services.
-- Mobile, web, or desktop GUI.
-- Tracking actual spending or providing budgeting advice.
-- Support for currencies other than Russian rubles (RUB).
+- Subscribing or unsubscribing the user from Telegram channels.
+- Fetching private messages, direct messages, or group messages.
+- Media download/storage; only post text and metadata are cached.
+- Multi-user/multi-tenant support.
+- Web UI, CLI commands beyond the existing server entry point, or persistent scheduling.
 
-## Decisions
+## Environment variables
 
-- Solver: custom branch-and-bound (stdlib only) instead of an external ILP or graph library.
-- Output: human-readable table plus JSON report.
-- Persistence: append-only local JSON history file.
+| Variable | Required | Description |
+|---|---|---|
+| `TELEGRAM_API_ID` | yes | Telegram API id (positive int) |
+| `TELEGRAM_API_HASH` | yes | Telegram API hash |
+| `TELEGRAM_SESSION_STRING` | yes | Telethon StringSession for user account |
+| `TGMCPSPY_DB_PATH` | no | SQLite database path (default: `tgmcpspy.db`) |
+| `TGMCPSPY_POST_TTL_DAYS` | no | Post retention in days (default: `90`) |
 
 ## Conventions
 
 - Follow PEP 8 and the ruff configuration in `pyproject.toml`.
 - Keep functions small and typed.
 - Write tests for public APIs and critical paths.
-- Use `decimal.Decimal` for percentages and scores.
+- Store timestamps as UTC ISO-8601 strings in SQLite.
+- Never log secrets or post text.

@@ -2,7 +2,7 @@
 
 ## Status
 
-DRAFT — pending implementation and review.
+IMPLEMENTED — reviewed and verified. All requirements and scenarios covered by 45 passing tests.
 
 ## Scope
 

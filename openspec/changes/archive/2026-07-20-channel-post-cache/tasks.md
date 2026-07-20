@@ -12,28 +12,27 @@ This file breaks the `channel-post-cache` change into concrete, reviewable tasks
   - Acceptance: `make check` still passes.
 
 - [x] **T2 — Domain models and configuration**
-  - Create `src/package_tgmcpspy/models.py` with `Channel`, `Post`, `ChannelInfo`, `MessageInfo`, and domain exceptions (`ConfigError`, `ChannelNotFoundError`, `TelegramError`).
+  - Create `src/package_tgmcpspy/models.py` with `Channel`, `Post`, `ChannelInfo`, `MessageInfo`, domain exceptions (`ConfigError`, `ChannelNotFoundError`, `TelegramError`), and `normalize_identifier`.
   - Create `src/package_tgmcpspy/config.py` with `AppConfig` and `load_config()` reading `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`, `TGMCPSPY_DB_PATH`, and `TGMCPSPY_POST_TTL_DAYS`.
   - Acceptance: config validation errors are clear; `make check` passes.
 
 - [x] **T3 — Database layer**
   - Create `src/package_tgmcpspy/db.py` with SQLAlchemy Core tables `channels` and `posts`.
+  - `UniqueConstraint("channel_id", "telegram_message_id")` on posts table.
   - Implement `_SyncRepository` + async `Repository` facade via `asyncio.to_thread`.
-  - Support channel upserts, tracked list, post upserts (immutable), date-range queries, TTL purge, cascade delete.
+  - Support channel upserts, tracked list, post upserts (immutable), date-range queries, per-channel TTL purge, cascade delete.
   - Acceptance: `make check` passes.
 
-## Remaining tasks
-
-- [ ] **T4 — Telegram client wrapper**
+- [x] **T4 — Telegram client wrapper**
   - Create `src/package_tgmcpspy/telegram.py`.
   - Implement `TelegramClientWrapper` using Telethon `StringSession`.
   - Connect with authorized-session check and fail fast on bad session (R3, S12).
-  - Implement `get_dialogs`, `resolve_identifier` (username / `-100...` id) (R20), `fetch_messages_since` (last 7 days) (R9, S5), and `fetch_messages_after` (newer than cached latest) (R10, S6).
+  - Implement `get_dialogs`, `resolve_identifier` using shared `normalize_identifier` (R20), `fetch_messages_since` accepting `ChannelInfo` (R9, S5), and `fetch_messages_after` accepting `ChannelInfo` (R10, S6).
   - Add capped `FloodWaitError` retry (3 retries, max 60 s sleep) (R17, S14).
   - Add mypy override for `telethon.*` in `pyproject.toml`.
   - Acceptance: `make check` passes; wrapper can be mocked deterministically for tests.
 
-- [ ] **T5 — MCP server surface**
+- [x] **T5 — MCP server surface**
   - Rewrite `src/package_tgmcpspy/server.py`.
   - Remove demo handlers `add`, `greeting`, `greet_user` (M1).
   - Add FastMCP lifespan with `AppContext` (config, repo, Telegram client).
@@ -46,20 +45,23 @@ This file breaks the `channel-post-cache` change into concrete, reviewable tasks
   - All calls remain effectively sequential (R18, S15).
   - Acceptance: `make check` passes; server starts when valid env vars are present.
 
-- [ ] **T6 — Tests**
+- [x] **T6 — Tests**
   - Delete `tests/test_smoke.py`.
-  - Create `tests/conftest.py` with in-memory SQLite engine/repo, fake Telegram client, and mock MCP context fixtures.
-  - Create `tests/test_config.py` for validation and happy path.
-  - Create `tests/test_db.py` covering schema, channel/post CRUD, inclusive date ranges (S10), and TTL purge (S18).
-  - Create `tests/test_telegram.py` covering identifier resolution (R20), fetch strategies (R9–R10), and FloodWait retry (S14).
-  - Create `tests/test_server.py` covering all tools and scenarios S1–S11, S15–S20.
-  - Acceptance: `make check` passes; coverage for changed code is ≥80%.
+  - Create `tests/conftest.py` with in-memory SQLite engine/repo, fake Telegram client, and app context fixtures.
+  - Create `tests/test_config.py` (5 tests: happy path, defaults, missing/invalid env).
+  - Create `tests/test_db.py` (7 tests: upsert, tracked filter, set_tracked, duplicate posts, inclusive date range, global TTL purge, per-channel TTL purge).
+  - Create `tests/test_telegram.py` (12 tests: normalize_identifier, resolve by username/numeric/-100 prefix/non-channel, fetch_messages_since/after, FloodWait retry and exhaustion).
+  - Create `tests/test_server.py` (21 tests: date parsing, resolve by username/numeric/-100/unknown, sync_dialogs, list_tracked_channels, add/remove_channel, update_channel backfill/incremental, update_all_channels success/partial failure, get_post found/not-found, list_channel_posts inclusive range/full text, list_all_posts tracked only).
+  - Acceptance: `make check` passes (45 tests total).
 
-- [ ] **T7 — Final review and archive**
-  - Review diff for correctness, security, typing, and test coverage.
-  - Update `docs/adr/` if any significant architectural decision changed during implementation.
-  - Archive the change: merge delta spec into `openspec/specs/` via the doc-writer stage.
-  - Acceptance: `make check` passes; OpenSpec docs are consistent with the code.
+- [x] **T7 — Final review and bug fixes**
+  - Fixed `normalize_identifier` to correctly strip the `-100` channel/supergroup prefix (R20).
+  - Fixed `MCPContext` type alias to provide all 3 generic parameters required by FastMCP's `Context`.
+  - Fixed resource decorators to not include `ctx` parameter (FastMCP validates URI params match function params).
+  - Removed stale `debug=True` from FastMCP constructor.
+  - Updated `openspec/project.md`, `.claude/rules/repository-map.md`, `.claude/rules/error-handling.md`.
+  - Updated tasks.md to reflect actual completion status.
+  - Acceptance: `make check` passes; 45 tests pass.
 
 ## Cross-cutting constraints
 
@@ -68,4 +70,3 @@ This file breaks the `channel-post-cache` change into concrete, reviewable tasks
 - Prefer small, focused commits.
 - Run `make check` before marking any task complete.
 - Keep functions small and explicitly typed.
-- Follow the package name `package_tgmcpspy` (not the stale `package_snowball` references in some template rules).

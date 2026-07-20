@@ -6,29 +6,33 @@ paths:
 # Repository Map
 
 ## Layout
-- `src/package_snowball/` — application code
+- `src/<package>/` — application code
 - `tests/` — pytest suite
-- `docs/` — specs, ADRs, and notes
-- `docs/adr/` — architecture decision records
+- `docs/` — notes and documentation
+- `openspec/adr/` — architecture decision records
+- `openspec/` — product specs and implementation plans
+  - `openspec/specs/` — current system behavior (single source of truth)
+  - `openspec/changes/` — in-progress and archived feature proposals
 
 ## Module hierarchy
-- `src/package_snowball/core/` — domain logic, models, business rules
-- `src/package_snowball/adapters/` — external integrations (API clients, DB, files)
-- `src/package_snowball/entrypoints/` — CLI, HTTP handlers, scheduled jobs
-- `src/package_snowball/config/` — settings, environment parsing
+- `models.py` — domain dataclasses, exceptions, shared utilities
+- `config.py` — settings, environment parsing
+- `db.py` — database tables, repository, schema initialization
+- `telegram.py` — external integrations (API clients, wrappers)
+- `server.py` — entry point, HTTP/MCP handlers, lifespan
 
 ## Dependency direction
-- Domain modules (`core/`) must not import from adapters or entrypoints.
-- Adapters may import from domain.
-- Entrypoints may import from domain and adapters.
+- Domain modules (`models`) must not import from adapters or entrypoints.
+- Adapters (`db`, `telegram`) may import from domain.
+- Entrypoints (`server`) may import from domain and adapters.
 
 ## Entry points
 - `Makefile` — development commands (`make check`, `make test`, etc.)
 - `pyproject.toml` — project metadata and tool configuration
 
 ## Where to add code
-- New modules → `src/package_snowball/`
+- New modules → `src/<package>/`
 - New tests → `tests/`
-- New decisions → `docs/adr/`
-- New CLI commands → `src/package_snowball/entrypoints/cli.py` or a new module under `entrypoints/`
-- New config schemas → `src/package_snowball/config/`
+- New decisions → `openspec/adr/`
+- New specs → `openspec/specs/` (only via delta-spec merge)
+- New change proposals → `openspec/changes/`

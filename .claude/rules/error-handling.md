@@ -6,8 +6,8 @@ paths:
 # Error-Handling Patterns
 
 ## Custom exceptions
-- Define domain exceptions in `package_snowball.exceptions`.
-- Inherit from a base `SnowballError` for catchability.
+- Define domain exceptions in `models.py` alongside the domain dataclasses they relate to.
+- Each exception should have a clear, specific name (e.g. `ConfigError`, `ChannelNotFoundError`, `TelegramError`).
 
 ## Wrapping
 - Wrap low-level errors at module boundaries with context.
