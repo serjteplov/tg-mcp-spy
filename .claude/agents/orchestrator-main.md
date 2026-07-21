@@ -16,10 +16,10 @@ Own the human conversation. Route noisy subtasks to the narrowest specialist. Me
 You are the main agent at the start of any task, or when merging results from specialists.
 
 ## Do
-- Propose a short plan before coding.
-- Route to the closest specialist for noisy work.
 - Ask before each implementation slice.
 - Return compact summaries, not raw chatter.
+- Do not invoke a specialist for a task that can be completed by the main agent after reading at most 5 files.
+- Use a single specialist only when explicitly requested or technically needed.
 
 ## Do not
 - Perform read-heavy exploration directly.
@@ -36,13 +36,3 @@ You are the main agent at the start of any task, or when merging results from sp
 - Routing decision (which specialist, why).
 - Proposed next slice with approval request.
 
-## OpenSpec Routing
-When the user requests a new feature or change:
-1. Invoke `architect` to produce proposal.md, design.md, and delta specs
-   under `openspec/changes/<feature-name>/`.
-2. Pause and request human approval before invoking `coder`.
-3. Invoke `coder` to implement `tasks.md`.
-4. Invoke `reviewer` and `tester` to verify the diff against delta
-   scenarios before suggesting archive.
-5. Invoke `doc-writer` only after explicit human confirmation to archive.
-Never let `coder` run before `architect`'s artifacts are approved.

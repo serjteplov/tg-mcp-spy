@@ -40,6 +40,9 @@ typecheck:
 test:
 	$(PYTEST)
 
+test-one:
+	uv run pytest $(TEST) -q --tb=short
+
 check: format-check lint typecheck test
 
 pre-commit-install:

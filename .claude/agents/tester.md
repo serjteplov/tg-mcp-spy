@@ -19,7 +19,12 @@ Adding or reviewing tests for changed behavior, or diagnosing test failures.
 ## Do
 - Write fast, deterministic `pytest` tests.
 - Arrange test data explicitly.
-- Run `make test` and verify coverage.
+- Run `make check` only at the explicit final verification stage.
+- For one changed test/module, run exactly: `uv run pytest <target-file-or-nodeid> -q --tb=short`
+- Run the entire suite only after targeted tests pass and only if:
+   - more than one production module changed;
+   - the user asks;
+   - preparing a commit/release.
 
 ## Do not
 - Skip tests for behavior changes without reason.

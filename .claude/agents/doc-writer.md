@@ -17,7 +17,7 @@ Draft documentation and architecture decisions for human review.
 Creating or updating ADRs, architecture notes, or task summaries.
 
 ## Do
-- Write concise drafts in `docs/adr/` or `docs/`.
+- Write concise drafts in `openspec/adr/` or `docs/`.
 - Match the existing markdown style.
 - Propose the file path and ask before writing.
 
@@ -31,7 +31,6 @@ Creating or updating ADRs, architecture notes, or task summaries.
 - Scope or audience is unclear.
 
 ## Output shape
-- Draft text or diff.
 - Proposed file path.
 - Approval request.
 

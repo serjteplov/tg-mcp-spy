@@ -1,0 +1,104 @@
+.
+├── .claude
+│   ├── agents
+│   │   ├── architect.md
+│   │   ├── coder.md
+│   │   ├── doc-writer.md
+│   │   ├── explorer.md
+│   │   ├── orchestrator-main.md
+│   │   ├── reviewer.md
+│   │   └── tester.md
+│   ├── hooks
+│   │   ├── block-dangerous-commands.sh
+│   │   ├── format-and-check.sh
+│   │   ├── git-push-reminder.sh
+│   │   ├── inject-git-context.sh
+│   │   ├── log-stop.sh
+│   │   └── protect-files.sh
+│   ├── rules
+│   │   ├── api-design.md
+│   │   ├── change-discipline.md
+│   │   ├── database.md
+│   │   ├── dependencies.md
+│   │   ├── documentation.md
+│   │   ├── error-handling.md
+│   │   ├── git-workflow.md
+│   │   ├── logging.md
+│   │   ├── performance.md
+│   │   ├── python-style.md
+│   │   ├── repository-map.md
+│   │   ├── security.md
+│   │   ├── testing.md
+│   │   └── typing.md
+│   ├── settings.json
+│   └── skills
+│       ├── api-integrator
+│       │   └── SKILL.md
+│       ├── archive-change
+│       │   └── SKILL.md
+│       ├── deploy-compose
+│       │   └── SKILL.md
+│       ├── draft-adr
+│       │   └── SKILL.md
+│       ├── explore-codebase
+│       │   └── SKILL.md
+│       ├── git-automation
+│       │   └── SKILL.md
+│       ├── implement-feature-slice
+│       │   └── SKILL.md
+│       ├── propose-change
+│       │   └── SKILL.md
+│       ├── refactor-small-safe
+│       │   └── SKILL.md
+│       ├── review-diff
+│       │   └── SKILL.md
+│       └── start-task
+│           └── SKILL.md
+├── CLAUDE.md
+├── .gitignore
+├── Makefile
+├── openspec
+│   ├── adr
+│   ├── api
+│   ├── changes
+│   │   └── archive
+│   │       └── 2026-07-20-channel-post-cache
+│   │           ├── design.md
+│   │           ├── notes
+│   │           │   └── implementation-plan.md
+│   │           ├── proposal.md
+│   │           ├── specs
+│   │           │   └── channels
+│   │           │       └── spec.md
+│   │           └── tasks.md
+│   ├── project.md
+│   └── specs
+│       └── channels
+│           └── spec.md
+├── .pre-commit-config.yaml
+├── pyproject.toml
+├── README.md
+├── src
+│   ├── package_tgmcpspy
+│   │   ├── config.py
+│   │   ├── db.py
+│   │   ├── __init__.py
+│   │   ├── models.py
+│   │   ├── server.py
+│   │   └── telegram.py
+│   └── tg_mcp_spy.egg-info
+│       ├── dependency_links.txt
+│       ├── entry_points.txt
+│       ├── PKG-INFO
+│       ├── requires.txt
+│       ├── SOURCES.txt
+│       └── top_level.txt
+├── tests
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_db.py
+│   ├── test_server.py
+│   └── test_telegram.py
+└── uv.lock
+
+32 directories, 73 files

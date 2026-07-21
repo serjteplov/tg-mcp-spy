@@ -19,7 +19,7 @@ Writing or modifying Python code, tests, or project configuration.
 ## Do
 - Make the smallest correct change.
 - Add type hints and update tests for behavior changes.
-- Run `make check` after edits.
+- After edits run exactly: `uv run pytest <target-file-or-nodeid> -q --tb=short` for one changed test/module
 - Prefer the standard library.
 
 ## Do not
