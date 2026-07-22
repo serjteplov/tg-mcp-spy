@@ -1,0 +1,130 @@
+===== USER MESSAGE 1 =====
+/clear
+
+===== USER MESSAGE 2 =====
+## Bounded context-restoration mode
+
+Goal: restore only the minimum context needed to continue this task after
+the previous session reached its context limit.
+
+Do not modify files.
+Do not spawn subagents.
+Do not invoke explorer agents or repository-exploration skills.
+Do not scan the repository, search broadly, inspect Git history, run tests,
+install dependencies, or read files outside the allowlist below.
+
+### Allowed paths
+
+Read only these files, in this order:
+
+1. openspec/changes/channel-post-cache/proposal.md
+2. openspec/changes/channel-post-cache/design.md
+3. openspec/changes/channel-post-cache/specs/channels/spec.md
+4. openspec/changes/channel-post-cache/notes/implementation-plan.md
+5. openspec/project.md
+6. README.md
+7. pyproject.toml
+8. Only the specific source files in `src/package_tgmcpspy/` that are
+directly
+   relevant to the above documents.
+
+Do not read every file under `src/package_tgmcpspy/` by default.
+First identify the relevant modules from the allowed OpenSpec documents,
+then read only those modules.
+
+### Read budget and stopping rule
+
+- Maximum: 20 files total, unless I explicitly approve more.
+- Stop reading as soon as you can summarize the project state and identify
+  the next actionable task.
+- If required context is outside the allowlist or budget, do not inspect it.
+  Ask me for permission and name the exact additional file needed.
+
+### Required response
+
+Return a concise context-restoration report:
+1. Current task and intended outcome
+2. Existing design/implementation status
+3. Relevant source modules read
+4. Decisions and constraints already established
+5. Open questions, risks, or inconsistencies
+
+Ask a questions only if the missing information blocks an accurate
+assessment.
+Otherwise, provide the report first.
+
+===== USER MESSAGE 3 =====
+Good. Do a safe refactor only. Constraints:
+• Preserve behavior exactly.
+• No API changes.
+• No schema changes.
+• No dependency changes.
+• Do not change error handling or exception logic.
+• Keep all existing comments (you may clarify them only if they are clearly
+outdated).
+• The refactored code must pass the same tests as before. Do not add new
+tests unless explicitly asked.
+• Prefer small, localized changes over large refactors in a single step.
+• When in doubt, leave the code as it was.
+
+===== USER MESSAGE 4 =====
+Review your own diff as a strict senior engineer.
+Review your current diff against the proposal.md, design.md,
+specs/channels/spec.md, notes/implementation-plan.md
+Please flag:
+* correctness gaps
+* unnecessary changes
+* hidden breaking changes
+* missing edge-case tests
+* deviations from approved plan
+* violations of the current constraints
+* maintainability issues
+* missing comments
+
+===== USER MESSAGE 5 =====
+/context
+
+===== USER MESSAGE 6 =====
+Fix only this gaps:
+1.
+2.
+3.
+11.
+12.
+13.
+14. - add comment
+15.
+16.
+
+===== USER MESSAGE 7 =====
+Fix only this gaps: 1, 2. 3. 11. 12. 13. 14 (add comment) 15. 16.
+
+===== USER MESSAGE 8 =====
+Fix only this gaps: 1, 2. 3. 11. 12. 13. 14 (add comment) 15. 16.
+
+===== USER MESSAGE 9 =====
+Good. Now do only this:
+1. Update openspec/changes/channel-post-cache/tasks.md
+2. Fill openspec/project.md respecting openspec guidlines and specification
+and structure
+3. Update repository-map.md, error-handling.md. Make them
+non-project-specific. Dont forget openspec
+
+===== USER MESSAGE 10 =====
+Implement Phase 6, Phase 7 as coder.md agent from
+openspec/changes/channel-post-cache/notes/implementation-plan.md
+Requirements:
+• Follow existing patterns.
+• If tests fail, fix the root cause and rerun.
+
+At the end report:
+2. Files changed
+3. Test commands run
+4. Current limitations
+
+===== USER MESSAGE 11 =====
+This feature is done.
+1. if you think README.md is need to be refreshed, please refresh it.
+2. Update openspec/changes/channel-post-cache/specs/channels/spec.md if
+needed
+3. Archive change in openspec via archive-change skill

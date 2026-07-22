@@ -2,7 +2,6 @@
 
 ## Working conventions
 - Prefer small, focused changes.
-- Read a rule only when it is directly required. Rules in `.claude/rules/`. Never load more than 3 optional rule files for a task without asking.
 - Keep implementation simple and explicit.
 - Ask before introducing new dependencies or changing project structure.
 - Do not modify `.env`.
