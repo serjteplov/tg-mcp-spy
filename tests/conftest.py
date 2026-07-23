@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +14,12 @@ from sqlalchemy.pool import StaticPool
 
 from package_tgmcpspy.config import AppConfig
 from package_tgmcpspy.db import Repository, init_schema
-from package_tgmcpspy.models import ChannelInfo, ChannelNotFoundError, MessageInfo
+from package_tgmcpspy.models import (
+    ChannelInfo,
+    ChannelNotFoundError,
+    ConversationKind,
+    MessageInfo,
+)
 
 
 @dataclass(frozen=True)
@@ -61,9 +67,11 @@ class FakeTelegramClient:
         telegram_id: int,
         username: str | None = None,
         title: str = "",
+        *,
+        kind: ConversationKind = "channel",
     ) -> ChannelInfo:
-        """Register a channel that the fake client knows about."""
-        info = ChannelInfo(telegram_id=telegram_id, username=username, title=title)
+        """Register a conversation that the fake client knows about."""
+        info = ChannelInfo(telegram_id=telegram_id, username=username, title=title, kind=kind)
         if username is not None:
             self._channels[username] = info
         self._channels[str(telegram_id)] = info
@@ -141,6 +149,17 @@ def app_context(
     repo: Repository,
     fake_client: FakeTelegramClient,
     app_config: AppConfig,
-) -> AppContext:
-    """Application context wired with fake client and in-memory DB."""
-    return AppContext(config=app_config, repo=repo, client=fake_client)
+) -> Iterator[AppContext]:
+    """Application context wired with fake client and in-memory DB.
+
+    Also binds the server-side ``_app_context`` global so tool helpers can
+    resolve the lifespan without spinning up a real FastMCP server.
+    """
+    import package_tgmcpspy.server as server_module
+
+    context = AppContext(config=app_config, repo=repo, client=fake_client)
+    server_module._app_context = context  # type: ignore[assignment]
+    try:
+        yield context
+    finally:
+        server_module._app_context = None

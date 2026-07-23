@@ -1,6 +1,7 @@
 """FastMCP server for tg-mcp-spy."""
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -35,9 +36,17 @@ class AppContext:
     client: TelegramClientWrapper
 
 
+# Bound by ``app_lifespan`` so tools can reach the AppContext without going
+# through ``ctx.request_context``, which is broken on mcp 1.28.x (FastMCP
+# swallows the underlying ``LookupError`` in ``get_context`` and hands tools
+# a Context whose ``_request_context`` is ``None``).
+_app_context: AppContext | None = None
+
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Initialize config, database, and Telegram client for the lifespan."""
+    global _app_context
     config = load_config()
     # StaticPool holds a single connection for the process lifetime, matching the
     # sequential-processing design (all MCP calls run one at a time).
@@ -50,18 +59,32 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     repo = Repository(engine)
     client = TelegramClientWrapper(config)
     await client.connect()
+    _app_context = AppContext(config=config, repo=repo, client=client)
     try:
-        yield AppContext(config=config, repo=repo, client=client)
+        yield _app_context
     finally:
         await client.disconnect()
         engine.dispose()
+        _app_context = None
 
 
 mcp = FastMCP("tg-mcp-spy", lifespan=app_lifespan, json_response=True)
 
 
 def _context(ctx: MCPContext) -> AppContext:
-    return ctx.request_context.lifespan_context
+    """Return the AppContext bound by ``app_lifespan``.
+
+    The ``ctx`` parameter is intentionally unused. On mcp 1.28.x FastMCP
+    catches the ``LookupError`` from ``self._mcp_server.request_context``
+    inside ``get_context()`` and hands tools a ``Context`` whose
+    ``_request_context`` is ``None``, which makes every access via
+    ``ctx.request_context.lifespan_context`` raise "Context is not available
+    outside of a request" (reproducible on both SSE and stdio paths).
+    """
+    del ctx  # unused; see docstring
+    if _app_context is None:
+        raise RuntimeError("Server lifespan has not started.")
+    return _app_context
 
 
 def _channel_to_dict(channel: Channel) -> dict[str, Any]:
@@ -313,15 +336,13 @@ async def channel_digest_prompt(
 
 def main() -> None:
     """Run the MCP server with uvicorn."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     import uvicorn
 
-    uvicorn.run(
-        "package_tgmcpspy.server:mcp",
-        host="127.0.0.1",
-        port=8000,
-        reload=True,
-        log_level="info",
-    )
+    uvicorn.run(mcp.sse_app(), host="127.0.0.1", port=8000, log_level="info")
 
 
 if __name__ == "__main__":

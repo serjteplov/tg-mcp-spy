@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from package_tgmcpspy.db import Repository
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine
+from sqlalchemy.pool import StaticPool
+
+from package_tgmcpspy.db import Repository, init_schema
 from package_tgmcpspy.models import ChannelInfo, MessageInfo
 
 
@@ -133,3 +136,68 @@ class TestRepository:
             ch_b.id, datetime.now(UTC) - timedelta(days=200), datetime.now(UTC)
         )
         assert len(ch_b_posts) == 1
+
+    async def test_existing_rows_default_to_channel_kind(self) -> None:
+        """S27 — pre-existing rows read back with kind='channel' after migration."""
+        legacy_metadata = MetaData()
+        legacy_channels = Table(
+            "channels",
+            legacy_metadata,
+            Column("id", Integer, primary_key=True),
+            Column("telegram_id", Integer, nullable=False, unique=True),
+            Column("username", String, nullable=True),
+            Column("title", String, nullable=False, default=""),
+            Column("is_tracked", Integer, nullable=False, default=0),
+            Column("last_message_id", Integer, nullable=True),
+            Column("last_fetched_at", String, nullable=True),
+        )
+        engine = create_engine(
+            "sqlite:///:memory:",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        legacy_metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                legacy_channels.insert().values(
+                    telegram_id=42,
+                    username="legacy",
+                    title="Legacy",
+                    is_tracked=1,
+                    last_message_id=99,
+                    last_fetched_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+                )
+            )
+
+        init_schema(engine)
+        repo = Repository(engine)
+        loaded = await repo.get_channel_by_telegram_id(42)
+        assert loaded is not None
+        assert loaded.kind == "channel"
+        assert loaded.telegram_id == 42
+        assert loaded.title == "Legacy"
+        assert loaded.is_tracked is True
+        assert loaded.last_message_id == 99
+
+    async def test_upsert_persists_kind_for_each_kind(self, repo: Repository) -> None:
+        """R27 — kind round-trips for channels, chats, and users."""
+        user = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username=None, title="Alice", kind="user"),
+            is_tracked=True,
+        )
+        chat = await repo.upsert_channel(
+            ChannelInfo(telegram_id=2, username=None, title="Family", kind="chat"),
+            is_tracked=True,
+        )
+        channel = await repo.upsert_channel(
+            ChannelInfo(telegram_id=3, username="news", title="News", kind="channel"),
+            is_tracked=True,
+        )
+
+        assert user.kind == "user"
+        assert chat.kind == "chat"
+        assert channel.kind == "channel"
+
+        tracked = await repo.list_tracked_channels()
+        kinds = {ch.telegram_id: ch.kind for ch in tracked}
+        assert kinds == {1: "user", 2: "chat", 3: "channel"}

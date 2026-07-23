@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
+
+type ConversationKind = Literal["channel", "chat", "user"]
 
 
 def normalize_identifier(identifier: str) -> int | str:
@@ -38,11 +41,12 @@ class TelegramError(Exception):
 
 @dataclass(frozen=True)
 class ChannelInfo:
-    """Lightweight information about a Telegram channel."""
+    """Lightweight information about a Telegram conversation."""
 
     telegram_id: int
     username: str | None
     title: str
+    kind: ConversationKind = "channel"
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,7 @@ class MessageInfo:
 
 @dataclass(frozen=True)
 class Channel:
-    """A cached Telegram channel record."""
+    """A cached Telegram conversation record."""
 
     id: int
     telegram_id: int
@@ -65,6 +69,7 @@ class Channel:
     is_tracked: bool
     last_message_id: int | None
     last_fetched_at: datetime | None
+    kind: ConversationKind = "channel"
 
 
 @dataclass(frozen=True)

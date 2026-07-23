@@ -57,3 +57,7 @@ dmypy.json
 working/
 .hypothesis/
 
+# Local SQLite cache (may contain DM content; never commit)
+*.db
+tgmcpspy.db
+

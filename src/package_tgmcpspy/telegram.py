@@ -12,7 +12,14 @@ from typing import Any
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
-from telethon.tl.types import Channel, PeerChannel
+from telethon.tl.types import (
+    Channel,
+    Chat,
+    PeerChannel,
+    PeerChat,
+    PeerUser,
+    User,
+)
 
 from package_tgmcpspy.config import AppConfig
 from package_tgmcpspy.models import (
@@ -77,36 +84,52 @@ class TelegramClientWrapper:
 
     @_with_flood_wait
     async def get_dialogs(self) -> list[ChannelInfo]:
-        """Return broadcast channels from the user's dialogs."""
+        """Return every conversation from the user's dialogs (channels, chats, users)."""
         channels: list[ChannelInfo] = []
         async for dialog in self._client.iter_dialogs():
             entity = dialog.entity
-            if isinstance(entity, Channel) and entity.broadcast:
+            if isinstance(entity, (Channel, Chat, User)):
                 channels.append(self._entity_to_channel_info(entity))
         return channels
 
     @_with_flood_wait
     async def resolve_identifier(self, identifier: str) -> ChannelInfo:
-        """Resolve a username or numeric channel id to a ChannelInfo."""
+        """Resolve a username or numeric id to a ChannelInfo.
+
+        Accepts any Telegram entity type the user can access: ``User`` (DM),
+        ``Chat`` (legacy small group), or ``Channel`` (broadcast/supergroup).
+        """
         parsed = normalize_identifier(identifier)
         if isinstance(parsed, int):
-            entity = await self._client.get_entity(PeerChannel(parsed))
+            entity = await self._client.get_entity(parsed)
         else:
             if not parsed:
-                raise ChannelNotFoundError(f"Empty channel identifier: {identifier!r}")
+                raise ChannelNotFoundError(f"Empty conversation identifier: {identifier!r}")
             entity = await self._client.get_entity(parsed)
 
-        if not isinstance(entity, Channel):
-            raise ChannelNotFoundError(f"Identifier does not resolve to a channel: {identifier!r}")
+        if not isinstance(entity, (Channel, Chat, User)):
+            raise ChannelNotFoundError(
+                f"Identifier does not resolve to a channel, chat, or user: {identifier!r}"
+            )
 
         return self._entity_to_channel_info(entity)
 
-    async def _resolve_entity(self, info: ChannelInfo) -> Channel:
-        """Resolve a ChannelInfo back to a Telethon Channel entity."""
-        entity = await self._client.get_entity(PeerChannel(info.telegram_id))
-        if not isinstance(entity, Channel):
+    async def _resolve_entity(self, info: ChannelInfo) -> Channel | Chat | User:
+        """Resolve a ChannelInfo back to a Telethon entity by kind."""
+        match info.kind:
+            case "user":
+                peer: Any = PeerUser(info.telegram_id)
+                expected = (User,)
+            case "chat":
+                peer = PeerChat(info.telegram_id)
+                expected = (Chat,)
+            case "channel":
+                peer = PeerChannel(info.telegram_id)
+                expected = (Channel,)
+        entity = await self._client.get_entity(peer)
+        if not isinstance(entity, expected):
             raise ChannelNotFoundError(
-                f"Channel info does not resolve to a channel: {info.telegram_id}"
+                f"Conversation info does not resolve to {info.kind}: {info.telegram_id}"
             )
         return entity
 
@@ -116,7 +139,7 @@ class TelegramClientWrapper:
         channel: ChannelInfo,
         cutoff: datetime,
     ) -> list[MessageInfo]:
-        """Fetch messages newer than ``cutoff`` for the given channel."""
+        """Fetch messages newer than ``cutoff`` for the given conversation."""
         entity = await self._resolve_entity(channel)
         messages = await self._client.get_messages(
             entity,
@@ -139,7 +162,7 @@ class TelegramClientWrapper:
         channel: ChannelInfo,
         min_id: int,
     ) -> list[MessageInfo]:
-        """Fetch messages with id greater than ``min_id`` for the given channel."""
+        """Fetch messages with id greater than ``min_id`` for the given conversation."""
         entity = await self._resolve_entity(channel)
         messages = await self._client.get_messages(
             entity,
@@ -156,11 +179,32 @@ class TelegramClientWrapper:
             for message in messages
         ]
 
-    @staticmethod
-    def _entity_to_channel_info(entity: Channel) -> ChannelInfo:
-        username = entity.username if entity.username else None
+    @classmethod
+    def _entity_to_channel_info(cls, entity: Channel | Chat | User) -> ChannelInfo:
+        """Convert a Telegram entity to a ChannelInfo with the right kind and title."""
+        if isinstance(entity, Channel):
+            return ChannelInfo(
+                telegram_id=entity.id,
+                username=entity.username if entity.username else None,
+                title=entity.title or "",
+                kind="channel",
+            )
+        if isinstance(entity, User):
+            full_name = " ".join(
+                part for part in (entity.first_name or "", entity.last_name or "") if part
+            )
+            # Store the bare username (no leading '@') to match Channel.username
+            # so callers can look up users and channels with a plain identifier.
+            return ChannelInfo(
+                telegram_id=entity.id,
+                username=entity.username if entity.username else None,
+                title=full_name or "",
+                kind="user",
+            )
+        # isinstance(entity, Chat)
         return ChannelInfo(
             telegram_id=entity.id,
-            username=username,
+            username=None,
             title=entity.title or "",
+            kind="chat",
         )

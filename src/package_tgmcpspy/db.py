@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import (
     Boolean,
@@ -23,7 +23,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Connection, Engine
 
-from package_tgmcpspy.models import Channel, ChannelInfo, MessageInfo, Post
+from package_tgmcpspy.models import (
+    Channel,
+    ChannelInfo,
+    ConversationKind,
+    MessageInfo,
+    Post,
+)
 
 metadata = MetaData()
 
@@ -34,6 +40,7 @@ channels_table = Table(
     Column("telegram_id", Integer, nullable=False, unique=True),
     Column("username", String, nullable=True),
     Column("title", String, nullable=False, default=""),
+    Column("kind", String, nullable=False, default="channel"),
     Column("is_tracked", Boolean, nullable=False, default=False),
     Column("last_message_id", Integer, nullable=True),
     Column("last_fetched_at", String, nullable=True),
@@ -87,6 +94,7 @@ def _row_to_channel(row: Any) -> Channel:
             if m["last_fetched_at"] is not None
             else None
         ),
+        kind=cast(ConversationKind, str(m["kind"])),
     )
 
 
@@ -128,6 +136,7 @@ class _SyncRepository:
                         username=info.username,
                         title=info.title,
                         is_tracked=is_tracked,
+                        kind=info.kind,
                     )
                 )
                 return self._get_channel_by_id(conn, channel_id)
@@ -137,6 +146,7 @@ class _SyncRepository:
                     telegram_id=info.telegram_id,
                     username=info.username,
                     title=info.title,
+                    kind=info.kind,
                     is_tracked=is_tracked,
                     last_message_id=None,
                     last_fetched_at=None,
@@ -400,5 +410,27 @@ class Repository:
 
 
 def init_schema(engine: Engine) -> None:
-    """Create all tables and indexes if they do not exist."""
+    """Create all tables, indexes, and lightweight schema upgrades.
+
+    Columns added in newer versions (e.g. ``channels.kind``) are appended via
+    ``ALTER TABLE`` when the table already exists so existing rows keep working
+    without a manual migration step.
+    """
     metadata.create_all(engine)
+    _upgrade_schema(engine)
+
+
+def _upgrade_schema(engine: Engine) -> None:
+    """Apply lightweight, additive schema upgrades (new columns only)."""
+    from sqlalchemy import text
+
+    upgrades: list[tuple[str, str, str]] = [
+        ("channels", "kind", "VARCHAR DEFAULT 'channel' NOT NULL"),
+    ]
+    with engine.begin() as conn:
+        for table, column, spec in upgrades:
+            rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            existing = {row[1] for row in rows}
+            if column in existing:
+                continue
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {spec}"))

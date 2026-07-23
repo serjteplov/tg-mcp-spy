@@ -12,7 +12,12 @@ from typing import Any
 
 import pytest
 
-from package_tgmcpspy.models import ChannelInfo, ChannelNotFoundError, MessageInfo
+from package_tgmcpspy.models import (
+    ChannelInfo,
+    ChannelNotFoundError,
+    ConversationKind,
+    MessageInfo,
+)
 
 
 class TestParseDateRange:
@@ -84,7 +89,7 @@ class TestResolveDbChannel:
 
 
 class TestSyncDialogs:
-    """S1 — sync_dialogs upserts dialogs as tracked."""
+    """S1, S21 — sync_dialogs upserts dialogs as tracked, including DMs and chats."""
 
     async def test_sync_dialogs_upserts_tracked(self, app_context: Any, fake_client: Any) -> None:
         fake_client.add_channel(telegram_id=10, username="chan_a", title="A")
@@ -96,6 +101,23 @@ class TestSyncDialogs:
 
         tracked = await app_context.repo.list_tracked_channels()
         assert len(tracked) == 2
+
+    async def test_sync_dialogs_includes_users_and_chats(
+        self, app_context: Any, fake_client: Any
+    ) -> None:
+        """S21 — sync_dialogs mirrors DMs, legacy chats, and broadcast channels."""
+        fake_client.add_channel(telegram_id=100, title="Alice", kind="user")
+        fake_client.add_channel(telegram_id=200, title="Family", kind="chat")
+        fake_client.add_channel(telegram_id=300, username="news", title="News", kind="channel")
+
+        result = await _call_tool(app_context, "sync_dialogs")
+        assert result["synced"] == 3
+
+        kinds = {row["telegram_id"]: row["kind"] for row in result["channels"]}
+        assert kinds == {100: "user", 200: "chat", 300: "channel"}
+
+        tracked = await app_context.repo.list_tracked_channels()
+        assert {row.kind for row in tracked} == {"user", "chat", "channel"}
 
 
 class TestListTrackedChannels:
@@ -122,6 +144,35 @@ class TestAddRemoveChannel:
 
         result = await _call_tool(app_context, "add_channel", channel="new_chan")
         assert result["is_tracked"] is True
+
+    async def test_add_user_by_numeric_id(self, app_context: Any, fake_client: Any) -> None:
+        """S22 — numeric user id resolves to a tracked user."""
+        fake_client.add_channel(
+            telegram_id=6199205118, username="alice", title="Alice", kind="user"
+        )
+
+        result = await _call_tool(app_context, "add_channel", channel="6199205118")
+        assert result["telegram_id"] == 6199205118
+        assert result["kind"] == "user"
+        assert result["is_tracked"] is True
+
+    async def test_add_legacy_chat_by_id(self, app_context: Any, fake_client: Any) -> None:
+        """S23 — negative chat id resolves to a tracked chat."""
+        fake_client.add_channel(telegram_id=123456789, title="Family", kind="chat")
+
+        result = await _call_tool(app_context, "add_channel", channel="123456789")
+        assert result["telegram_id"] == 123456789
+        assert result["kind"] == "chat"
+
+    async def test_add_supergroup_by_id(self, app_context: Any, fake_client: Any) -> None:
+        """S24 — large negative id resolves to a tracked channel."""
+        fake_client.add_channel(
+            telegram_id=1234567890, username="sg", title="Supergroup", kind="channel"
+        )
+
+        result = await _call_tool(app_context, "add_channel", channel="-1001234567890")
+        assert result["telegram_id"] == 1234567890
+        assert result["kind"] == "channel"
 
     async def test_remove_channel_untracks(self, app_context: Any, fake_client: Any) -> None:
         fake_client.add_channel(telegram_id=60, username="rem_chan", title="Rem")
@@ -167,6 +218,46 @@ class TestUpdateChannel:
         assert result["inserted"] == 1
         assert result["last_message_id"] == 11
 
+    async def test_update_channel_backfill_7_days_for_user(
+        self, app_context: Any, fake_client: Any
+    ) -> None:
+        """S26/R32 — first-add backfill stays at 7 days for the user kind."""
+        from package_tgmcpspy.server import _update_channel
+
+        fake_client.add_channel(telegram_id=700, title="Alice", kind="user")
+        now = datetime.now(UTC)
+        fake_client.add_message(700, 1, "recent", timestamp=now - timedelta(days=2))
+        fake_client.add_message(700, 2, "stale", timestamp=now - timedelta(days=10))
+
+        result = await _update_channel(app_context, "700")
+        assert result["fetched"] == 1
+        assert result["inserted"] == 1
+
+        stored = await app_context.repo.get_channel_by_telegram_id(700)
+        assert stored is not None
+        posts = await app_context.repo.list_channel_posts(stored.id, now - timedelta(days=30), now)
+        assert {post.telegram_message_id for post in posts} == {1}
+
+    async def test_update_channel_backfill_7_days_for_chat(
+        self, app_context: Any, fake_client: Any
+    ) -> None:
+        """S26/R32 — first-add backfill stays at 7 days for the chat kind."""
+        from package_tgmcpspy.server import _update_channel
+
+        fake_client.add_channel(telegram_id=800, title="Family", kind="chat")
+        now = datetime.now(UTC)
+        fake_client.add_message(800, 1, "recent", timestamp=now - timedelta(days=3))
+        fake_client.add_message(800, 2, "stale", timestamp=now - timedelta(days=15))
+
+        result = await _update_channel(app_context, "800")
+        assert result["fetched"] == 1
+        assert result["inserted"] == 1
+
+        stored = await app_context.repo.get_channel_by_telegram_id(800)
+        assert stored is not None
+        posts = await app_context.repo.list_channel_posts(stored.id, now - timedelta(days=30), now)
+        assert {post.telegram_message_id for post in posts} == {1}
+
 
 class TestUpdateAllChannels:
     """S7, S17 — update_all_channels sequential update and partial failure."""
@@ -186,6 +277,38 @@ class TestUpdateAllChannels:
         result = await _call_tool(app_context, "update_all_channels")
         assert len(result["results"]) == 2
         assert result["errors"] == {}
+
+    async def test_update_all_channels_handles_all_kinds(
+        self, app_context: Any, fake_client: Any
+    ) -> None:
+        """S25 — update_all_channels updates DM, chat, and channel kinds sequentially."""
+        items: list[tuple[int, ConversationKind]] = [
+            (101, "user"),
+            (202, "chat"),
+            (303, "channel"),
+        ]
+        for telegram_id, kind in items:
+            fake_client.add_channel(telegram_id=telegram_id, title=f"Title{telegram_id}", kind=kind)
+            fake_client.add_message(
+                telegram_id, 1, f"msg-{telegram_id}", timestamp=datetime.now(UTC)
+            )
+            await app_context.repo.upsert_channel(
+                ChannelInfo(
+                    telegram_id=telegram_id,
+                    username=None,
+                    title=f"Title{telegram_id}",
+                    kind=kind,
+                ),
+                is_tracked=True,
+            )
+
+        result = await _call_tool(app_context, "update_all_channels")
+        assert result["errors"] == {}
+        assert len(result["results"]) == 3
+
+        for entry in result["results"]:
+            assert entry["fetched"] >= 1
+            assert entry["last_message_id"] >= 1
 
     async def test_update_all_channels_partial_failure(
         self, app_context: Any, fake_client: Any

@@ -1,6 +1,6 @@
 # tg-mcp-spy
 
-A Python MCP (Model Context Protocol) server that caches Telegram channel posts in a local SQLite database and exposes them via MCP tools. It connects to Telegram through a user session (Telethon) and mirrors the user's broadcast-channel subscriptions into a queryable local cache.
+A Python MCP (Model Context Protocol) server that caches Telegram conversations (channels, group chats, and direct messages) in a local SQLite database and exposes them via MCP tools. It connects to Telegram through a user session (Telethon) and mirrors the user's dialogs into a queryable local cache.
 
 ## Quick start
 
@@ -37,17 +37,21 @@ The server binds to `127.0.0.1:8000` by default.
 
 | Tool | Description |
 |---|---|
-| `list_tracked_channels` | List all locally tracked channels |
-| `add_channel(channel)` | Add a channel to the local tracked list |
-| `remove_channel(channel)` | Remove a channel from the local tracked list |
-| `sync_dialogs` | Sync tracked channels with your Telegram subscriptions |
-| `update_channel(channel)` | Fetch latest posts for a single channel |
-| `update_all_channels` | Fetch latest posts for all tracked channels |
+| `list_tracked_channels` | List all locally tracked conversations (channel, chat, or user) |
+| `add_channel(channel)` | Add a channel/chat/user to the local tracked list |
+| `remove_channel(channel)` | Remove a tracked conversation from the local tracked list |
+| `sync_dialogs` | Sync tracked conversations with every dialog in Telegram (DMs, group chats, channels) |
+| `update_channel(channel)` | Fetch latest posts for a single conversation |
+| `update_all_channels` | Fetch latest posts for all tracked conversations |
 | `get_post(channel, post_id)` | Get a specific cached post |
-| `list_channel_posts(channel, start_date, end_date)` | List posts from one channel by date range |
-| `list_all_posts(start_date, end_date)` | List posts from all tracked channels by date range |
+| `list_channel_posts(channel, start_date, end_date)` | List posts from one conversation by date range |
+| `list_all_posts(start_date, end_date)` | List posts from all tracked conversations by date range |
 
-Channel identifiers accept a Telegram username or numeric id (including `-100...` format). Dates accept `YYYY-MM-DD` or ISO timestamps, interpreted as UTC.
+Tool names keep the legacy `channel`/`add_channel` shape even when the underlying entity is a user or chat — the word "channel" is shorthand for "any tracked conversation".
+
+Identifiers accept a Telegram username, a numeric id (positive for users, negative for legacy chats, `-100...` for channels/supergroups), or a phone number. Telethon resolves the right entity type automatically. Dates accept `YYYY-MM-DD` or ISO timestamps, interpreted as UTC.
+
+`sync_dialogs` mirrors *every* dialog in the user's Telegram account — DMs, legacy small-group chats, broadcast channels, and supergroups. If you do not want to track a particular conversation, call `remove_channel` to untrack it locally (this does **not** unsubscribe or delete the dialog on Telegram).
 
 ## MCP Resources
 
@@ -84,3 +88,5 @@ src/package_tgmcpspy/
 ```
 
 All MCP tool calls are processed sequentially. Cached posts are immutable — edits and deletions on Telegram are ignored. Posts older than the configured TTL are purged automatically.
+
+A tracked conversation carries a `kind` discriminator with value `channel`, `chat`, or `user`, exposed through `list_tracked_channels` and the per-tool responses. Existing rows in `tgmcpspy.db` continue to load without a manual migration step; the server adds the `kind` column automatically and back-fills it with `channel`.
