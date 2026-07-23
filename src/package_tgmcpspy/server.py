@@ -335,14 +335,14 @@ async def channel_digest_prompt(
 
 
 def main() -> None:
-    """Run the MCP server with uvicorn."""
+    """Run the MCP server with uvicorn via the streamable-HTTP transport."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     import uvicorn
 
-    uvicorn.run(mcp.sse_app(), host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(mcp.streamable_http_app(), host="127.0.0.1", port=8000, log_level="info")
 
 
 if __name__ == "__main__":

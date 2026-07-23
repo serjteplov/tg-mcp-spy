@@ -17,6 +17,12 @@ export TELEGRAM_API_ID=your_api_id
 export TELEGRAM_API_HASH=your_api_hash
 export TELEGRAM_SESSION_STRING=your_session_string
 ```
+#### How to get ids
+https://my.telegram.org/
+sudo nano /etc/hosts  
+149.154.167.220 my.telegram.org
+sudo resolvectl flush-caches
+python src/package_tgmcpspy/obtain_session.py
 
 The session string must be generated externally (e.g. via Telethon's interactive login). Optional variables:
 
@@ -29,7 +35,7 @@ The session string must be generated externally (e.g. via Telethon's interactive
 
 ```bash
 npx @modelcontextprotocol/inspector
-python -m package_tgmcpspy.server
+set -a && source .env && set +a && python -m package_tgmcpspy.server
 ```
 ```bash
 set -a && source .env && set +a && mcp dev src/package_tgmcpspy/server.py
