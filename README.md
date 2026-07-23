@@ -28,7 +28,11 @@ The session string must be generated externally (e.g. via Telethon's interactive
 ### 3. Run the server
 
 ```bash
+npx @modelcontextprotocol/inspector
 python -m package_tgmcpspy.server
+```
+```bash
+set -a && source .env && set +a && mcp dev src/package_tgmcpspy/server.py
 ```
 
 The server binds to `127.0.0.1:8000` by default.
