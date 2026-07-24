@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine
 from sqlalchemy.pool import StaticPool
 
@@ -201,3 +202,112 @@ class TestRepository:
         tracked = await repo.list_tracked_channels()
         kinds = {ch.telegram_id: ch.kind for ch in tracked}
         assert kinds == {1: "user", 2: "chat", 3: "channel"}
+
+
+class TestPurgeAllCache:
+    """Tests for the transactional full-cache reset."""
+
+    async def test_purge_all_cache_deletes_posts_and_channels_with_counts(
+        self, repo: Repository
+    ) -> None:
+        ch_a = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"), is_tracked=True
+        )
+        ch_b = await repo.upsert_channel(
+            ChannelInfo(telegram_id=2, username="b", title="B"), is_tracked=True
+        )
+        await repo.upsert_posts(
+            ch_a.id,
+            [
+                MessageInfo(1, datetime.now(UTC), "x"),
+                MessageInfo(2, datetime.now(UTC), "y"),
+            ],
+        )
+        await repo.upsert_posts(ch_b.id, [MessageInfo(10, datetime.now(UTC), "z")])
+
+        result = await repo.purge_all_cache()
+
+        assert result == {"posts_deleted": 3, "channels_deleted": 2}
+        assert await repo.list_tracked_channels() == []
+        assert (
+            await repo.list_channel_posts(
+                ch_a.id,
+                datetime.now(UTC) - timedelta(days=1),
+                datetime.now(UTC) + timedelta(days=1),
+            )
+            == []
+        )
+        assert (
+            await repo.list_channel_posts(
+                ch_b.id,
+                datetime.now(UTC) - timedelta(days=1),
+                datetime.now(UTC) + timedelta(days=1),
+            )
+            == []
+        )
+
+    async def test_purge_all_cache_on_empty_db_returns_zero_counts(self, repo: Repository) -> None:
+        result = await repo.purge_all_cache()
+        assert result == {"posts_deleted": 0, "channels_deleted": 0}
+
+    async def test_purge_all_cache_is_idempotent(self, repo: Repository) -> None:
+        await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"), is_tracked=True
+        )
+        channel = await repo.get_channel_by_telegram_id(1)
+        assert channel is not None
+        await repo.upsert_posts(
+            channel.id,
+            [MessageInfo(1, datetime.now(UTC), "x")],
+        )
+
+        first = await repo.purge_all_cache()
+        second = await repo.purge_all_cache()
+
+        assert first == {"posts_deleted": 1, "channels_deleted": 1}
+        assert second == {"posts_deleted": 0, "channels_deleted": 0}
+
+    async def test_purge_all_cache_untracked_channels(self, repo: Repository) -> None:
+        """Untracked channels are also removed; the cache is fully cleared."""
+        await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"), is_tracked=False
+        )
+        await repo.upsert_channel(
+            ChannelInfo(telegram_id=2, username="b", title="B"), is_tracked=True
+        )
+
+        result = await repo.purge_all_cache()
+        assert result == {"posts_deleted": 0, "channels_deleted": 2}
+
+    async def test_purge_all_cache_rolls_back_on_failure(self, repo: Repository) -> None:
+        """Induced failure mid-transaction must leave all rows intact."""
+        from unittest.mock import patch
+
+        from package_tgmcpspy import db as db_module
+
+        ch = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"), is_tracked=True
+        )
+        await repo.upsert_posts(
+            ch.id,
+            [MessageInfo(1, datetime.now(UTC), "x"), MessageInfo(2, datetime.now(UTC), "y")],
+        )
+
+        # Patch the channels delete to raise so the open transaction rolls
+        # back. The posts delete has already executed but must be undone.
+        with (
+            patch.object(
+                db_module.channels_table, "delete", side_effect=RuntimeError("induced failure")
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await repo.purge_all_cache()
+
+        tracked = await repo.list_tracked_channels()
+        assert len(tracked) == 1
+        remaining = await repo.list_channel_posts(
+            ch.id,
+            datetime.now(UTC) - timedelta(days=1),
+            datetime.now(UTC) + timedelta(days=1),
+        )
+        assert len(remaining) == 2

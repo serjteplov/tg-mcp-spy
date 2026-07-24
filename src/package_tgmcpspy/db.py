@@ -329,6 +329,21 @@ class _SyncRepository:
             ).scalar()
             return _parse_timestamp(str(value)) if value is not None else None
 
+    def purge_all_cache(self) -> dict[str, int]:
+        """Delete every cache-owned row in one transaction and return counts.
+
+        Posts are removed first, then channels, so the FK cascade on
+        ``posts.channel_id`` is not relied on. The transaction rolls back on
+        any failure, leaving the cache unchanged.
+        """
+        with self._engine.begin() as conn:
+            posts_deleted = int(conn.execute(posts_table.delete()).rowcount)
+            channels_deleted = int(conn.execute(channels_table.delete()).rowcount)
+        return {
+            "posts_deleted": posts_deleted,
+            "channels_deleted": channels_deleted,
+        }
+
 
 class Repository:
     """Asynchronous facade over the synchronous SQLite repository."""
@@ -407,6 +422,10 @@ class Repository:
 
     async def oldest_post_timestamp(self, channel_id: int) -> datetime | None:
         return await asyncio.to_thread(self._sync.oldest_post_timestamp, channel_id)
+
+    async def purge_all_cache(self) -> dict[str, int]:
+        """Delete every cache-owned row in one transaction and return counts."""
+        return await asyncio.to_thread(self._sync.purge_all_cache)
 
 
 def init_schema(engine: Engine) -> None:

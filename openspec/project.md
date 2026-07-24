@@ -25,8 +25,8 @@ tg-mcp-spy is a Python MCP (Model Context Protocol) server that caches messages 
 - **Conversation**: a Telegram `Channel`, legacy `Chat`, or `User`, identified by a `kind` discriminator (`channel`, `chat`, or `user`).
 - **Tracked conversation**: a conversation marked for local caching (`is_tracked=True`).
 - **Post**: a cached message from a tracked conversation, containing Telegram message id, conversation reference, UTC timestamp, and text.
-- **Sync**: mirroring every accessible Telegram dialog into the local cache (`sync_dialogs`).
-- **Update**: fetching new posts for a conversation since its last cached message (`update_channel`, `update_all_channels`). A first update backfills the previous 7 days for every conversation kind.
+- **Sync**: mirroring every accessible Telegram dialog into the local cache (`add_channel_all`).
+- **Update**: fetching new posts for a conversation since its last cached message (`update_channel`, `update_all_channels`). A first update backfills the configured number of previous days for every conversation kind (default: 7).
 
 Public dataclass and MCP tool names retain the legacy word `channel` for compatibility; in that surface, “channel” means any tracked conversation.
 
@@ -55,12 +55,13 @@ src/package_tgmcpspy/
 
 ### Key design decisions
 
-- **Discriminated conversation model** — `Channel` and `ChannelInfo` carry `kind=channel|chat|user`; class and MCP tool names remain unchanged to preserve compatibility.
+- **Discriminated conversation model** — `Channel` and `ChannelInfo` carry `kind=channel|chat|user`; public dataclass and most MCP tool names retain the legacy channel terminology, while the all-dialog tool is exposed as `add_channel_all`.
 - **Backward-compatible SQLite schema** — the dedicated `kind` column defaults existing rows to `channel`, avoiding a manual migration.
 - **SQLAlchemy Core + sync SQLite + `asyncio.to_thread`** (no aiosqlite) — one fewer dependency; simpler typing.
 - **Sequential MCP tool processing** — no concurrent Telegram or DB operations; simplifies ordering and rate-limit handling.
 - **Immutable cached posts** — edits and deletions on Telegram are ignored; `upsert_posts` only inserts new rows.
 - **Per-conversation TTL purge** — posts older than a configurable TTL (default 90 days) are purged for each conversation at the start of `update_channel`.
+- **Transactional local-cache reset** — `remove_all_channels` and `trash_all_messages` require explicit confirmation and atomically clear cache-owned rows while leaving Telegram memberships unchanged.
 - **Domain exceptions raised from tools** — `ConfigError`, `ChannelNotFoundError`, `TelegramError`; FastMCP converts these to MCP error responses. No `{ok, error}` envelopes.
 - **No MCP notifications** — pure request/response; no resource subscriptions or events.
 
@@ -72,6 +73,7 @@ src/package_tgmcpspy/
 - Fetch and cache text messages through the Telegram user-session API.
 - Expose conversation/post operations as MCP tools so clients can list tracked conversations, refresh data, and read posts by id or date range.
 - Add/remove conversations from the local tracked list without changing Telegram membership or subscriptions.
+- Bulk-add conversations sequentially and provide transactional local-cache reset operations with explicit confirmation.
 - Read-only MCP resources for conversation lists and single posts.
 - Prompt template for conversation digests.
 
@@ -99,6 +101,7 @@ src/package_tgmcpspy/
 | `TELEGRAM_SESSION_STRING` | yes | Telethon StringSession for user account |
 | `TGMCPSPY_DB_PATH` | no | SQLite database path (default: `tgmcpspy.db`) |
 | `TGMCPSPY_POST_TTL_DAYS` | no | Post retention in days (default: `90`) |
+| `TGMCPSPY_BACKFILL_DAYS` | no | Initial history depth for first updates (default: `7`) |
 
 ## Conventions
 

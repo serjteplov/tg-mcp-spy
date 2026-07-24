@@ -18,6 +18,7 @@ class AppConfig:
     telegram_session_string: str
     database_path: Path
     post_ttl_days: int
+    backfill_days: int = 7
 
 
 def _require(name: str) -> str:
@@ -50,10 +51,14 @@ def load_config() -> AppConfig:
     ttl_raw = os.environ.get("TGMCPSPY_POST_TTL_DAYS", "90")
     ttl_days = _positive_int("TGMCPSPY_POST_TTL_DAYS", ttl_raw)
 
+    backfill_raw = os.environ.get("TGMCPSPY_BACKFILL_DAYS", "7")
+    backfill_days = _positive_int("TGMCPSPY_BACKFILL_DAYS", backfill_raw)
+
     return AppConfig(
         telegram_api_id=api_id,
         telegram_api_hash=api_hash,
         telegram_session_string=session_string,
         database_path=db_path,
         post_ttl_days=ttl_days,
+        backfill_days=backfill_days,
     )

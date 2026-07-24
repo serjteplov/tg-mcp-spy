@@ -13,7 +13,7 @@ This delta extends `openspec/specs/channels/spec.md` to support direct messages 
 ### ADDED
 
 - **R27** Every cached conversation SHALL carry a `kind` field with value `channel`, `chat`, or `user`.
-- **R28** `sync_dialogs` SHALL mirror every conversation in the user's Telegram dialog list (DMs, legacy chats, and channels), not only broadcast channels.
+- **R28** `add_channel_all` SHALL mirror every conversation in the user's Telegram dialog list (DMs, legacy chats, and channels), not only broadcast channels.
 - **R29** `add_channel(channel)` SHALL accept identifiers that resolve to a `User`, `Chat`, or `Channel` entity on Telegram.
 - **R30** `update_channel` and `update_all_channels` SHALL fetch and cache posts from any tracked `User`, `Chat`, or `Channel`.
 - **R31** The server SHALL persist the conversation kind in a dedicated SQLite column with default value `channel` so existing rows remain valid without a manual migration step.
@@ -40,7 +40,7 @@ GIVEN the server is configured with a valid Telegram user session
   AND the user has a direct message dialog with user U
   AND a legacy small-group chat dialog C
   AND a broadcast-channel dialog B
-WHEN the MCP client calls sync_dialogs
+WHEN the MCP client calls add_channel_all
 THEN the response includes U, C, and B
   AND U is marked with kind="user"
   AND C is marked with kind="chat"

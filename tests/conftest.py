@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class AppContext:
     config: AppConfig
     repo: Repository
     client: FakeTelegramClient
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _memory_engine() -> Engine:
