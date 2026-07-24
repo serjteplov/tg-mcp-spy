@@ -225,14 +225,7 @@ async def add_channel(ctx: MCPContext, channel: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def add_channel_batch(ctx: MCPContext, channels: str) -> list[dict[str, Any]]:
-    """Add multiple channels to the local tracked list from a comma-separated string.
-
-    Trims surrounding whitespace, ignores empty segments, deduplicates by
-    keeping the first occurrence of each identifier, and rejects input that
-    has no remaining identifier. Identifiers are processed sequentially; an
-    individual failure does not stop the batch. Already tracked conversations
-    are reported with status ``already_tracked``. Messages are never fetched.
-    """
+    """Add multiple channels to the local tracked list from a comma-separated string."""
     app = _context(ctx)
     identifiers = _parse_batch_identifiers(channels)
 
