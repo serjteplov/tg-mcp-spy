@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine
+from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table, create_engine, text
 from sqlalchemy.pool import StaticPool
 
 from package_tgmcpspy.db import Repository, init_schema
@@ -202,6 +202,133 @@ class TestRepository:
         tracked = await repo.list_tracked_channels()
         kinds = {ch.telegram_id: ch.kind for ch in tracked}
         assert kinds == {1: "user", 2: "chat", 3: "channel"}
+
+
+class TestPostAuthorFields:
+    """Tests for the per-post username and display_name fields (R-NEW-1)."""
+
+    async def test_upsert_posts_persists_author_fields(self, repo: Repository) -> None:
+        channel = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"), is_tracked=True
+        )
+        messages = [
+            MessageInfo(
+                telegram_message_id=1,
+                timestamp_utc=datetime.now(UTC),
+                text="hello",
+                username="alice",
+                display_name="Alice Smith",
+            ),
+        ]
+        await repo.upsert_posts(channel.id, messages)
+
+        posts = await repo.list_channel_posts(
+            channel.id,
+            datetime.now(UTC) - timedelta(days=1),
+            datetime.now(UTC) + timedelta(days=1),
+        )
+        assert len(posts) == 1
+        assert posts[0].username == "alice"
+        assert posts[0].display_name == "Alice Smith"
+
+    async def test_upsert_posts_round_trip_with_none_author_fields(self, repo: Repository) -> None:
+        channel = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"), is_tracked=True
+        )
+        messages = [
+            MessageInfo(
+                telegram_message_id=1,
+                timestamp_utc=datetime.now(UTC),
+                text="anonymous",
+            ),
+        ]
+        await repo.upsert_posts(channel.id, messages)
+
+        posts = await repo.list_channel_posts(
+            channel.id,
+            datetime.now(UTC) - timedelta(days=1),
+            datetime.now(UTC) + timedelta(days=1),
+        )
+        assert len(posts) == 1
+        assert posts[0].username is None
+        assert posts[0].display_name is None
+
+    async def test_schema_upgrade_adds_post_author_columns(self) -> None:
+        """S-NEW-6 — init_schema adds username, display_name, and the index to a
+        pre-existing posts table that lacks them.
+        """
+        legacy_metadata = MetaData()
+        legacy_channels = Table(
+            "channels",
+            legacy_metadata,
+            Column("id", Integer, primary_key=True),
+            Column("telegram_id", Integer, nullable=False, unique=True),
+            Column("username", String, nullable=True),
+            Column("title", String, nullable=False, default=""),
+            Column("is_tracked", Integer, nullable=False, default=0),
+            Column("last_message_id", Integer, nullable=True),
+            Column("last_fetched_at", String, nullable=True),
+        )
+        legacy_posts = Table(
+            "posts",
+            legacy_metadata,
+            Column("id", Integer, primary_key=True),
+            Column(
+                "channel_id",
+                Integer,
+                ForeignKey("channels.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            Column("telegram_message_id", Integer, nullable=False),
+            Column("text", String, nullable=False, default=""),
+            Column("timestamp_utc", String, nullable=False),
+        )
+        engine = create_engine(
+            "sqlite:///:memory:",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        legacy_metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                legacy_channels.insert().values(
+                    telegram_id=1,
+                    username="chan",
+                    title="Chan",
+                    is_tracked=1,
+                )
+            )
+            conn.execute(
+                legacy_posts.insert().values(
+                    channel_id=1,
+                    telegram_message_id=42,
+                    text="legacy",
+                    timestamp_utc=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+                )
+            )
+
+        init_schema(engine)
+
+        with engine.begin() as conn:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(posts)")).fetchall()}
+        assert "username" in cols
+        assert "display_name" in cols
+
+        indexes = {
+            row[1] for row in engine.connect().execute(text("PRAGMA index_list(posts)")).fetchall()
+        }
+        assert "ix_posts_display_name" in indexes
+
+        repo = Repository(engine)
+        posts = await repo.list_channel_posts(
+            1,
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2027, 1, 1, tzinfo=UTC),
+        )
+        assert len(posts) == 1
+        assert posts[0].telegram_message_id == 42
+        assert posts[0].username is None
+        assert posts[0].display_name is None
 
 
 class TestPurgeAllCache:

@@ -59,9 +59,12 @@ posts_table = Table(
     Column("telegram_message_id", Integer, nullable=False),
     Column("text", String, nullable=False, default=""),
     Column("timestamp_utc", String, nullable=False),
+    Column("username", String, nullable=True),
+    Column("display_name", String, nullable=True),
     UniqueConstraint("channel_id", "telegram_message_id"),
     Index("ix_posts_channel_timestamp", "channel_id", "timestamp_utc"),
     Index("ix_posts_timestamp", "timestamp_utc"),
+    Index("ix_posts_display_name", "display_name"),
 )
 
 
@@ -106,6 +109,8 @@ def _row_to_post(row: Any) -> Post:
         telegram_message_id=int(m["telegram_message_id"]),
         text=str(m["text"]),
         timestamp_utc=_parse_timestamp(str(m["timestamp_utc"])),
+        username=m["username"],
+        display_name=m["display_name"],
     )
 
 
@@ -230,6 +235,8 @@ class _SyncRepository:
                         "telegram_message_id": m.telegram_message_id,
                         "text": m.text,
                         "timestamp_utc": _format_timestamp(m.timestamp_utc),
+                        "username": m.username,
+                        "display_name": m.display_name,
                     }
                     for m in new_messages
                 ],
@@ -440,11 +447,16 @@ def init_schema(engine: Engine) -> None:
 
 
 def _upgrade_schema(engine: Engine) -> None:
-    """Apply lightweight, additive schema upgrades (new columns only)."""
+    """Apply lightweight, additive schema upgrades (new columns and indexes)."""
     from sqlalchemy import text
 
     upgrades: list[tuple[str, str, str]] = [
         ("channels", "kind", "VARCHAR DEFAULT 'channel' NOT NULL"),
+        ("posts", "username", "VARCHAR"),
+        ("posts", "display_name", "VARCHAR"),
+    ]
+    index_upgrades: list[tuple[str, str, str]] = [
+        ("posts", "ix_posts_display_name", "display_name"),
     ]
     with engine.begin() as conn:
         for table, column, spec in upgrades:
@@ -453,3 +465,10 @@ def _upgrade_schema(engine: Engine) -> None:
             if column in existing:
                 continue
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {spec}"))
+        for table, index_name, column in index_upgrades:
+            existing_indexes = {
+                row[1] for row in conn.execute(text(f"PRAGMA index_list({table})")).fetchall()
+            }
+            if index_name in existing_indexes:
+                continue
+            conn.execute(text(f"CREATE INDEX {index_name} ON {table} ({column})"))

@@ -2,6 +2,9 @@
 
 A Python MCP (Model Context Protocol) server that caches Telegram conversations (channels, group chats, and direct messages) in a local SQLite database and exposes them via MCP tools. It connects to Telegram through a user session (Telethon) and mirrors the user's dialogs into a queryable local cache.
 
+## Usage
+!!! First you should call add_channel_all. It is neccessary!
+
 ## Quick start
 
 ### 1. Install dependencies
@@ -114,3 +117,5 @@ src/package_tgmcpspy/
 All MCP tool calls are processed sequentially. Cached posts are immutable — edits and deletions on Telegram are ignored. Posts older than the configured TTL are purged automatically.
 
 A tracked conversation carries a `kind` discriminator with value `channel`, `chat`, or `user`, exposed through `list_tracked_channels` and the per-tool responses. Existing rows in `tgmcpspy.db` continue to load without a manual migration step; the server adds the `kind` column automatically and back-fills it with `channel`.
+
+Cached posts returned by `get_post`, `list_channel_posts`, and `list_all_posts` include two nullable sender fields when a `User` message author is resolved: `username` (the public Telegram handle, no leading `@`) and `display_name` (the sender's `first_name + last_name`, falling back to `username`). Both fields are `null` for broadcast-channel posts, anonymous admins, service messages, and deleted-account senders. The new columns and an index on `display_name` are added to existing databases on next startup; existing rows stay `null` and are not backfilled.

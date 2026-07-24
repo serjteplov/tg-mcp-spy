@@ -21,7 +21,7 @@ This spec defines the behavior of the `tg-mcp-spy` MCP server with respect to Te
 - **R9** For a conversation without prior update state, `update_channel` SHALL fetch posts from the configured number of previous days, defaulting to 7 days.
 - **R10** For a conversation already in cache, `update_channel` SHALL fetch only posts newer than the newest cached post.
 - **R11** The server SHALL persist cached conversations and posts in a SQLite database.
-- **R12** A cached post SHALL contain at minimum: Telegram message id, conversation identifier, UTC timestamp, and text.
+- **R12** A cached post SHALL contain at minimum: Telegram message id, conversation identifier, UTC timestamp, text, and the sender's `username` and `display_name` (both nullable).
 - **R13** The server SHALL provide an MCP tool `get_post(channel, post_id)` returning a single post.
 - **R14** The server SHALL provide an MCP tool `list_channel_posts` that accepts exactly one query mode: both `start_date` and `end_date` for an explicit inclusive UTC range, or a positive integer `days` for an inclusive rolling UTC range from `now - days` through `now`. It SHALL reject missing, incomplete, mixed, zero, negative, fractional, boolean, and non-numeric modes before querying or mutating cached data.
 - **R15** The server SHALL provide an MCP tool `list_all_posts(start_date, end_date)` returning posts from all tracked conversations within an inclusive UTC date range.
@@ -49,6 +49,10 @@ This spec defines the behavior of the `tg-mcp-spy` MCP server with respect to Te
 - **R37** `remove_all_channels` SHALL reject missing or false confirmation before mutation and SHALL succeed with zero counts on an empty cache.
 - **R38** The server SHALL provide `trash_all_messages(confirm)` with the same confirmed, transactional full-cache reset semantics, deletion counts, and confirmation requirement as `remove_all_channels`; after reset, a later re-add and first update SHALL use configured initial backfill.
 - **R39** The MCP tool `add_channel_all` SHALL be the sole all-dialog tracking tool; the legacy `sync_dialogs` name SHALL not be exposed, documented, or referenced by public prompts.
+- **R40** A cached post SHALL carry two per-message sender fields populated from Telethon's already-resolved `Message.sender` at the time of fetch: `username` (the sender's Telegram public `@username` without the leading `@`) and `display_name` (the sender's `first_name + last_name`, trimmed and joined with a single space, falling back to `username` when neither name is present). Both fields are nullable.
+- **R41** Both `username` and `display_name` SHALL be `NULL` for messages where the sender cannot be identified as a regular Telegram `User`: broadcast-channel posts (anonymous admin / channel-post), service messages (`message.action is not None`), senders marked as deleted (`sender.deleted is True`), and messages where `message.sender` is `None` even if `sender_id` is set.
+- **R42** The `posts` table SHALL have an index on `display_name` to support future per-author lookups without a schema change.
+- **R43** `get_post`, `list_channel_posts`, and `list_all_posts` SHALL include `username` and `display_name` in their response payload via the existing `asdict(post)` serialization. The keys are present in every post and MAY be `null`.
 
 ## Scenarios
 
@@ -467,6 +471,65 @@ THEN add_channel_all is present
   AND sync_dialogs is absent
 ```
 
+### Post author fields
+
+#### S44 — Group post with real name and username
+
+```
+GIVEN channel A is a supergroup
+  AND user U (telegram_id=42, first_name="Alice", last_name="Smith",
+    username="alice") sends a message M
+WHEN update_channel("A") caches M
+THEN the cached row for M has username="alice" AND
+  display_name="Alice Smith"
+```
+
+#### S45 — Channel post with no resolved user sender
+
+```
+GIVEN channel A is a broadcast channel
+  AND an anonymous admin posts a message M
+WHEN update_channel("A") caches M
+THEN the cached row for M has username=NULL AND display_name=NULL
+```
+
+#### S46 — Service message has no author fields
+
+```
+GIVEN channel A has a service message M (e.g. a member-joined event)
+WHEN update_channel("A") caches M
+THEN the cached row for M has username=NULL AND display_name=NULL
+```
+
+#### S47 — Sender with username but no real name
+
+```
+GIVEN user U (telegram_id=42, first_name=NULL, last_name=NULL,
+    username="bob") sends a message M
+WHEN update_channel("A") caches M
+THEN the cached row for M has username="bob" AND display_name="bob"
+```
+
+#### S48 — MCP tool output contains the new fields
+
+```
+GIVEN channel A has a cached post with username="alice" and
+  display_name="Alice Smith"
+WHEN the MCP client calls get_post("A", post_id)
+THEN the response JSON contains the keys "username" and "display_name"
+  AND their values equal "alice" and "Alice Smith"
+```
+
+#### S49 — Schema upgrade on an existing database
+
+```
+GIVEN an existing SQLite database with a posts table that lacks
+  `username` and `display_name` columns
+WHEN the server starts against that database
+THEN init_schema adds the two columns AND the index ix_posts_display_name
+  AND existing rows are read with username=NULL and display_name=NULL
+```
+
 ## Notes
 
 - All data is fetched through the Telegram API (Telethon user session); no web scraping.
@@ -474,4 +537,4 @@ THEN add_channel_all is present
 - Public dataclass, exception, and MCP tool names retain the legacy word `channel`; in this API, “channel” means any tracked conversation.
 - `User`, legacy `Chat`, and `Channel` entities are distinguished by `kind=user|chat|channel` and resolved through the corresponding Telethon peer type.
 - Existing database rows default to `kind="channel"`; no manual migration is required.
-- The minimal post model stores id, conversation reference, timestamp, and text. Media and rich metadata are intentionally out of scope.
+- The minimal post model stores id, conversation reference, timestamp, text, and the nullable sender fields `username` and `display_name`. Media and rich metadata are intentionally out of scope.

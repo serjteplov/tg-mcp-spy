@@ -173,6 +173,82 @@ class TestResolveIdentifier:
         ):
             assert (await wrapper._resolve_entity(info)) is expected
 
+    async def test_fetch_messages_user_kind_propagates_entity_error(self) -> None:
+        """Regression: when get_entity(PeerUser(...)) raises, the error bubbles up
+        (without being swallowed by the flood-wait decorator or wrapped in
+        TelegramError). This is the exact shape of the 'Could not find the
+        input entity' failure mode reported in the wild.
+        """
+        from telethon.tl.types import PeerUser
+
+        wrapper = _make_wrapper()
+
+        async def fake_get_entity(peer: Any) -> Any:
+            if isinstance(peer, PeerUser):
+                raise ValueError(
+                    f"Could not find the input entity for {peer} ({type(peer).__name__}). "
+                    "Please read https://docs.telethon.dev/en/stable/concepts/entities.html "
+                    "to find out more details."
+                )
+            return _make_channel_entity(telegram_id=99, title="Chan")
+
+        wrapper._client.get_entity = fake_get_entity
+        wrapper._client.get_messages = AsyncMock(return_value=[])
+
+        user_info = ChannelInfo(telegram_id=2442311503, username=None, title="X", kind="user")
+        with pytest.raises(ValueError, match="Could not find the input entity"):
+            await wrapper.fetch_messages_since(user_info, datetime.now(UTC))
+
+    async def test_resolve_identifier_int_warms_cache_on_miss(self) -> None:
+        """Cache-miss int path: first get_entity fails, then succeeds after
+        get_dialogs warms the cache. The final ChannelInfo must reflect the
+        resolved user, and get_dialogs must be called exactly once.
+        """
+        wrapper = _make_wrapper()
+        user_entity = _make_user_entity(telegram_id=1272750372, first_name="Alex", username="alex1")
+
+        warmup_calls = {"dialogs": 0}
+
+        async def fake_get_dialogs() -> list[ChannelInfo]:
+            warmup_calls["dialogs"] += 1
+            return []
+
+        async def fake_get_entity(peer: Any) -> Any:
+            if warmup_calls["dialogs"] == 0:
+                raise ValueError("Could not find the input entity for PeerUser(...)")
+            return user_entity
+
+        wrapper._client.get_entity = fake_get_entity
+        wrapper.get_dialogs = fake_get_dialogs
+
+        info = await wrapper.resolve_identifier("1272750372")
+        assert info.telegram_id == 1272750372
+        assert info.kind == "user"
+        assert info.title == "Alex"
+        assert warmup_calls["dialogs"] == 1
+
+    async def test_resolve_identifier_int_gives_up_after_warmup(self) -> None:
+        """Cache-miss + still unresolvable after warmup: raise ChannelNotFoundError
+        with actionable guidance, and call get_dialogs exactly once (no loop).
+        """
+        wrapper = _make_wrapper()
+
+        warmup_calls = {"dialogs": 0}
+
+        async def fake_get_dialogs() -> list[ChannelInfo]:
+            warmup_calls["dialogs"] += 1
+            return []
+
+        async def fake_get_entity(peer: Any) -> Any:
+            raise ValueError("Could not find the input entity for PeerUser(user_id=99) (PeerUser).")
+
+        wrapper._client.get_entity = fake_get_entity
+        wrapper.get_dialogs = fake_get_dialogs
+
+        with pytest.raises(ChannelNotFoundError, match="add_channel_all"):
+            await wrapper.resolve_identifier("99")
+        assert warmup_calls["dialogs"] == 1
+
 
 class TestFetchMessages:
     """Tests for fetch_messages_since and fetch_messages_after (R9–R10)."""
@@ -212,6 +288,154 @@ class TestFetchMessages:
         messages = await wrapper.fetch_messages_after(info, min_id=10)
         assert len(messages) == 1
         assert messages[0].telegram_message_id == 11
+
+    async def test_fetch_messages_since_populates_author_fields(self) -> None:
+        """S-NEW-1 — supergroup post with both username and display_name."""
+        wrapper = _make_wrapper()
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=7)
+
+        msg = MagicMock()
+        msg.id = 1
+        msg.date = now
+        msg.text = "hello"
+        msg.action = None
+        msg.sender = _make_user_entity(
+            telegram_id=42, first_name="Alice", last_name="Smith", username="alice"
+        )
+
+        entity = _make_channel_entity(telegram_id=100, username="test", title="Test")
+        wrapper._client.get_entity = AsyncMock(return_value=entity)
+        wrapper._client.get_messages = AsyncMock(return_value=[msg])
+
+        info = ChannelInfo(telegram_id=100, username="test", title="Test")
+        messages = await wrapper.fetch_messages_since(info, cutoff)
+        assert len(messages) == 1
+        assert messages[0].username == "alice"
+        assert messages[0].display_name == "Alice Smith"
+
+    async def test_fetch_messages_since_no_user_sender_yields_none(self) -> None:
+        """S-NEW-2 — broadcast channel post with no resolved user sender."""
+        wrapper = _make_wrapper()
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=7)
+
+        msg = MagicMock()
+        msg.id = 1
+        msg.date = now
+        msg.text = "channel post"
+        msg.action = None
+        msg.sender = None
+
+        entity = _make_channel_entity(telegram_id=100, username="test", title="Test")
+        wrapper._client.get_entity = AsyncMock(return_value=entity)
+        wrapper._client.get_messages = AsyncMock(return_value=[msg])
+
+        info = ChannelInfo(telegram_id=100, username="test", title="Test")
+        messages = await wrapper.fetch_messages_since(info, cutoff)
+        assert messages[0].username is None
+        assert messages[0].display_name is None
+
+    async def test_fetch_messages_since_service_message_yields_none(self) -> None:
+        """S-NEW-3 — service messages (e.g. member-joined) have no author fields."""
+        wrapper = _make_wrapper()
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=7)
+
+        msg = MagicMock()
+        msg.id = 1
+        msg.date = now
+        msg.text = ""
+        msg.action = MagicMock()  # any non-None action object
+        msg.sender = _make_user_entity(telegram_id=42, first_name="Alice", username="alice")
+
+        entity = _make_channel_entity(telegram_id=100, username="test", title="Test")
+        wrapper._client.get_entity = AsyncMock(return_value=entity)
+        wrapper._client.get_messages = AsyncMock(return_value=[msg])
+
+        info = ChannelInfo(telegram_id=100, username="test", title="Test")
+        messages = await wrapper.fetch_messages_since(info, cutoff)
+        assert messages[0].username is None
+        assert messages[0].display_name is None
+
+
+class TestSenderFields:
+    """Unit tests for the _sender_fields helper."""
+
+    def test_real_name_and_username(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = _make_user_entity(
+            telegram_id=1, first_name="Alice", last_name="Smith", username="alice"
+        )
+        assert _sender_fields(msg) == ("alice", "Alice Smith")
+
+    def test_real_name_only(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = _make_user_entity(
+            telegram_id=1, first_name="Alice", last_name="Smith", username=None
+        )
+        assert _sender_fields(msg) == (None, "Alice Smith")
+
+    def test_username_only(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = _make_user_entity(telegram_id=1, first_name="", last_name=None, username="bob")
+        assert _sender_fields(msg) == ("bob", "bob")
+
+    def test_no_name_no_username(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = _make_user_entity(
+            telegram_id=1, first_name=None, last_name=None, username=None
+        )
+        assert _sender_fields(msg) == (None, None)
+
+    def test_service_message_returns_none(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = MagicMock()
+        msg.sender = _make_user_entity(telegram_id=1, first_name="Alice", username="alice")
+        assert _sender_fields(msg) == (None, None)
+
+    def test_deleted_sender_returns_none(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        sender = MagicMock(spec=TlUser)
+        sender.deleted = True
+        sender.username = "ghost"
+        sender.first_name = "Ghost"
+        sender.last_name = None
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = sender
+        assert _sender_fields(msg) == (None, None)
+
+    def test_channel_sender_returns_none(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = _make_channel_entity(telegram_id=1, username="news", title="News")
+        assert _sender_fields(msg) == (None, None)
+
+    def test_no_sender_returns_none(self) -> None:
+        from package_tgmcpspy.telegram import _sender_fields
+
+        msg = MagicMock()
+        msg.action = None
+        msg.sender = None
+        assert _sender_fields(msg) == (None, None)
 
 
 class TestFloodWaitRetry:
@@ -312,7 +536,7 @@ def _make_supergroup_entity(
 
 def _make_user_entity(
     telegram_id: int,
-    first_name: str = "User",
+    first_name: str | None = "User",
     last_name: str | None = None,
     username: str | None = None,
 ) -> TlUser:

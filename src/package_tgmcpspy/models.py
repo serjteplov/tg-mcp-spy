@@ -56,6 +56,8 @@ class MessageInfo:
     telegram_message_id: int
     timestamp_utc: datetime
     text: str
+    username: str | None = None
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,3 +83,5 @@ class Post:
     telegram_message_id: int
     text: str
     timestamp_utc: datetime
+    username: str | None = None
+    display_name: str | None = None

@@ -544,6 +544,32 @@ class TestGetPost:
         result = await _call_tool(app_context, "get_post", channel="postchan", post_id=42)
         assert result["text"] == "hello"
 
+    async def test_get_post_payload_includes_author_fields(
+        self, app_context: Any, fake_client: Any
+    ) -> None:
+        """S-NEW-5 — get_post response contains username and display_name."""
+        fake_client.add_channel(telegram_id=100, username="postchan", title="Posts")
+        ch = await app_context.repo.upsert_channel(
+            fake_client._channels["postchan"], is_tracked=True
+        )
+        now = datetime.now(UTC)
+        await app_context.repo.upsert_posts(
+            ch.id,
+            [
+                MessageInfo(
+                    telegram_message_id=1,
+                    timestamp_utc=now,
+                    text="hi",
+                    username="alice",
+                    display_name="Alice Smith",
+                )
+            ],
+        )
+
+        result = await _call_tool(app_context, "get_post", channel="postchan", post_id=1)
+        assert result["username"] == "alice"
+        assert result["display_name"] == "Alice Smith"
+
     async def test_get_post_not_found_raises(self, app_context: Any, fake_client: Any) -> None:
         fake_client.add_channel(telegram_id=100, username="postchan", title="Posts")
         await app_context.repo.upsert_channel(fake_client._channels["postchan"], is_tracked=True)
@@ -610,6 +636,41 @@ class TestListChannelPosts:
             end_date="2030-12-31",
         )
         assert result[0]["text"] == "Hello, world!"
+
+    async def test_list_channel_posts_payload_includes_author_fields(
+        self, app_context: Any, fake_client: Any
+    ) -> None:
+        fake_client.add_channel(telegram_id=100, username="authorchan", title="Authors")
+        ch = await app_context.repo.upsert_channel(
+            fake_client._channels["authorchan"], is_tracked=True
+        )
+        now = datetime.now(UTC)
+        await app_context.repo.upsert_posts(
+            ch.id,
+            [
+                MessageInfo(
+                    telegram_message_id=1,
+                    timestamp_utc=now,
+                    text="hi",
+                    username="alice",
+                    display_name="Alice Smith",
+                ),
+                MessageInfo(telegram_message_id=2, timestamp_utc=now, text="anon"),
+            ],
+        )
+
+        result = await _call_tool(
+            app_context,
+            "list_channel_posts",
+            channel="authorchan",
+            start_date="2026-01-01",
+            end_date="2030-12-31",
+        )
+        by_id = {post["telegram_message_id"]: post for post in result}
+        assert by_id[1]["username"] == "alice"
+        assert by_id[1]["display_name"] == "Alice Smith"
+        assert by_id[2]["username"] is None
+        assert by_id[2]["display_name"] is None
 
     async def test_list_channel_posts_rolling_days_inclusive(
         self, app_context: Any, fake_client: Any

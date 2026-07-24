@@ -24,7 +24,7 @@ tg-mcp-spy is a Python MCP (Model Context Protocol) server that caches messages 
 
 - **Conversation**: a Telegram `Channel`, legacy `Chat`, or `User`, identified by a `kind` discriminator (`channel`, `chat`, or `user`).
 - **Tracked conversation**: a conversation marked for local caching (`is_tracked=True`).
-- **Post**: a cached message from a tracked conversation, containing Telegram message id, conversation reference, UTC timestamp, and text.
+- **Post**: a cached message from a tracked conversation, containing Telegram message id, conversation reference, UTC timestamp, text, and the per-message sender fields `username` (Telegram public handle) and `display_name` (`first_name + last_name`, falling back to `username`). Both sender fields are nullable and are `None` for broadcast-channel posts, anonymous admins, service messages, and deleted-account senders.
 - **Sync**: mirroring every accessible Telegram dialog into the local cache (`add_channel_all`).
 - **Update**: fetching new posts for a conversation since its last cached message (`update_channel`, `update_all_channels`). A first update backfills the configured number of previous days for every conversation kind (default: 7).
 
