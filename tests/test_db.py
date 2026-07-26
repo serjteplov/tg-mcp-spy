@@ -171,10 +171,20 @@ class TestRepository:
             )
 
         init_schema(engine)
+        with engine.begin() as conn:
+            table_names = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table'")
+                ).fetchall()
+            }
+        assert "channel_groups" in table_names
+
         repo = Repository(engine)
         loaded = await repo.get_channel_by_telegram_id(42)
         assert loaded is not None
         assert loaded.kind == "channel"
+        assert loaded.groups == ()
         assert loaded.telegram_id == 42
         assert loaded.title == "Legacy"
         assert loaded.is_tracked is True
@@ -438,3 +448,74 @@ class TestPurgeAllCache:
             datetime.now(UTC) + timedelta(days=1),
         )
         assert len(remaining) == 2
+
+
+class TestChannelGroups:
+    """Tests for local channel-group persistence and filtering."""
+
+    async def test_upsert_normalizes_and_replaces_groups(self, repo: Repository) -> None:
+        info = ChannelInfo(telegram_id=1, username="a", title="A")
+
+        channel = await repo.upsert_channel(info, groups=" z  a z ")
+        assert channel.groups == ("a", "z")
+
+        replaced = await repo.upsert_channel(info, groups=" b ")
+        assert replaced.groups == ("b",)
+        assert await repo.get_channel_groups(channel.id) == ("b",)
+
+    async def test_set_groups_filters_tracked_channels(self, repo: Repository) -> None:
+        await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"),
+            groups="news work",
+        )
+        await repo.upsert_channel(
+            ChannelInfo(telegram_id=2, username="b", title="B"),
+            groups="personal",
+        )
+
+        matching = await repo.list_tracked_channels(groups=("work",))
+        assert [channel.telegram_id for channel in matching] == [1]
+
+        updated = await repo.set_channel_groups(1, " home home ")
+        assert updated is not None
+        assert updated.groups == ("home",)
+        assert await repo.list_tracked_channels(groups="work") == []
+
+    async def test_untracking_clears_groups_and_rejects_group_update(
+        self, repo: Repository
+    ) -> None:
+        channel = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"),
+            groups="news",
+        )
+
+        untracked = await repo.set_tracked(1, False)
+        assert untracked is not None
+        assert untracked.groups == ()
+        assert await repo.set_channel_groups(1, "other") is None
+        assert await repo.get_channel_groups(channel.id) == ()
+
+    async def test_recent_post_ids_are_descending_and_capped(self, repo: Repository) -> None:
+        channel = await repo.upsert_channel(ChannelInfo(telegram_id=1, username="a", title="A"))
+        now = datetime.now(UTC)
+        await repo.upsert_posts(
+            channel.id,
+            [MessageInfo(i, now, str(i)) for i in range(1, 106)],
+        )
+
+        post_ids = await repo.list_recent_cached_post_ids(channel.id)
+        assert len(post_ids) == 100
+        assert post_ids[:3] == [105, 104, 103]
+        assert post_ids[-1] == 6
+
+    async def test_purge_all_cache_removes_group_rows(self, repo: Repository) -> None:
+        channel = await repo.upsert_channel(
+            ChannelInfo(telegram_id=1, username="a", title="A"),
+            groups="news",
+        )
+
+        result = await repo.purge_all_cache()
+
+        assert result == {"posts_deleted": 0, "channels_deleted": 1}
+        assert await repo.list_tracked_channels() == []
+        assert await repo.get_channel_groups(channel.id) == ()

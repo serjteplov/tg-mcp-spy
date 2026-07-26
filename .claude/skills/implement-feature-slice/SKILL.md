@@ -28,5 +28,4 @@ task complete.
 
 ## Output
 - Changed files list.
-- `make check` results.
 - Proposed next slice or completion note.

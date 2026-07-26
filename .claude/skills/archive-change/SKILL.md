@@ -7,8 +7,7 @@ description: This skill should be used when a change's implementation
 
 # Archive Change
 
-1. Confirm all tasks in `tasks.md` are checked off and reviewer/tester
-   have signed off on all scenarios.
+1. Confirm all tasks in `tasks.md` are checked off.
 2. Ask the human for explicit confirmation to archive.
 3. Merge ADDED/MODIFIED/REMOVED requirements from `changes/<feature-name>/specs/` into `openspec/specs/<domain>/spec.md`.
 4. Move `changes/<feature-name>/` to `changes/archive/YYYY-MM-DD-<feature-name>/`.

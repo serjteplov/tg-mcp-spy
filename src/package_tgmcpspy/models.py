@@ -72,6 +72,7 @@ class Channel:
     last_message_id: int | None
     last_fetched_at: datetime | None
     kind: ConversationKind = "channel"
+    groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

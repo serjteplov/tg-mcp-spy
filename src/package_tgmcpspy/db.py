@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     String,
     Table,
     UniqueConstraint,
@@ -44,6 +45,20 @@ channels_table = Table(
     Column("is_tracked", Boolean, nullable=False, default=False),
     Column("last_message_id", Integer, nullable=True),
     Column("last_fetched_at", String, nullable=True),
+)
+
+channel_groups_table = Table(
+    "channel_groups",
+    metadata,
+    Column(
+        "channel_id",
+        Integer,
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("group_name", String, nullable=False),
+    PrimaryKeyConstraint("channel_id", "group_name"),
+    Index("ix_channel_groups_group_name", "group_name"),
 )
 
 posts_table = Table(
@@ -83,7 +98,48 @@ def _parse_timestamp(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _row_to_channel(row: Any) -> Channel:
+def _normalize_groups(value: str) -> tuple[str, ...]:
+    """Normalize a space-separated group string."""
+    return tuple(sorted(set(value.split())))
+
+
+def _normalize_group_filter(
+    groups: Sequence[str] | str | None,
+) -> tuple[str, ...] | None:
+    if groups is None:
+        return None
+    if isinstance(groups, str):
+        normalized = _normalize_groups(groups)
+        return normalized or None
+    normalized = tuple(sorted({group.strip() for group in groups if group.strip()}))
+    return normalized or None
+
+
+def _get_channel_groups(conn: Connection, channel_id: int) -> tuple[str, ...]:
+    rows = conn.execute(
+        select(channel_groups_table.c.group_name)
+        .where(channel_groups_table.c.channel_id == channel_id)
+        .order_by(channel_groups_table.c.group_name)
+    ).all()
+    return tuple(str(row[0]) for row in rows)
+
+
+def _replace_channel_groups(
+    conn: Connection,
+    channel_id: int,
+    groups: tuple[str, ...],
+) -> None:
+    conn.execute(
+        channel_groups_table.delete().where(channel_groups_table.c.channel_id == channel_id)
+    )
+    if groups:
+        conn.execute(
+            channel_groups_table.insert(),
+            [{"channel_id": channel_id, "group_name": group} for group in groups],
+        )
+
+
+def _row_to_channel(conn: Connection, row: Any) -> Channel:
     m = row._mapping
     return Channel(
         id=int(m["id"]),
@@ -98,6 +154,7 @@ def _row_to_channel(row: Any) -> Channel:
             else None
         ),
         kind=cast(ConversationKind, str(m["kind"])),
+        groups=_get_channel_groups(conn, int(m["id"])),
     )
 
 
@@ -125,8 +182,10 @@ class _SyncRepository:
         info: ChannelInfo,
         *,
         is_tracked: bool = True,
+        groups: str = "",
     ) -> Channel:
         """Insert or update a channel and return the resulting record."""
+        groups_tuple = _normalize_groups(groups) if is_tracked else ()
         with self._engine.begin() as conn:
             existing = conn.execute(
                 select(channels_table).where(channels_table.c.telegram_id == info.telegram_id)
@@ -144,6 +203,7 @@ class _SyncRepository:
                         kind=info.kind,
                     )
                 )
+                _replace_channel_groups(conn, channel_id, groups_tuple)
                 return self._get_channel_by_id(conn, channel_id)
 
             conn.execute(
@@ -162,20 +222,50 @@ class _SyncRepository:
             ).first()
             if row is None:
                 raise RuntimeError("Inserted channel disappeared immediately")
-            return _row_to_channel(row)
+            channel_id = int(row._mapping["id"])
+            _replace_channel_groups(conn, channel_id, groups_tuple)
+            return self._get_channel_by_id(conn, channel_id)
 
     def _get_channel_by_id(self, conn: Connection, channel_id: int) -> Channel:
         row = conn.execute(select(channels_table).where(channels_table.c.id == channel_id)).first()
         if row is None:
             raise RuntimeError(f"Channel {channel_id} disappeared during upsert")
-        return _row_to_channel(row)
+        return _row_to_channel(conn, row)
 
-    def list_tracked_channels(self) -> list[Channel]:
+    def list_tracked_channels(
+        self,
+        groups: Sequence[str] | str | None = None,
+    ) -> list[Channel]:
+        group_filter = _normalize_group_filter(groups)
         with self._engine.begin() as conn:
-            rows = conn.execute(
-                select(channels_table).where(channels_table.c.is_tracked.is_(True))
-            ).all()
-            return [_row_to_channel(row) for row in rows]
+            query = select(channels_table).where(channels_table.c.is_tracked.is_(True))
+            if group_filter is not None:
+                query = query.where(
+                    channels_table.c.id.in_(
+                        select(channel_groups_table.c.channel_id).where(
+                            channel_groups_table.c.group_name.in_(group_filter)
+                        )
+                    )
+                )
+            rows = conn.execute(query.order_by(channels_table.c.id)).all()
+            return [_row_to_channel(conn, row) for row in rows]
+
+    def get_channel_groups(self, channel_id: int) -> tuple[str, ...]:
+        with self._engine.begin() as conn:
+            return _get_channel_groups(conn, channel_id)
+
+    def set_channel_groups(self, telegram_id: int, groups: str) -> Channel | None:
+        """Replace groups for a tracked channel, or return None when unavailable."""
+        groups_tuple = _normalize_groups(groups)
+        with self._engine.begin() as conn:
+            existing = conn.execute(
+                select(channels_table).where(channels_table.c.telegram_id == telegram_id)
+            ).first()
+            if existing is None or not bool(existing._mapping["is_tracked"]):
+                return None
+            channel_id = int(existing._mapping["id"])
+            _replace_channel_groups(conn, channel_id, groups_tuple)
+            return self._get_channel_by_id(conn, channel_id)
 
     def set_tracked(self, telegram_id: int, tracked: bool) -> Channel | None:
         """Update the tracked flag for a channel and return the record, or None if absent."""
@@ -187,6 +277,12 @@ class _SyncRepository:
                 return None
 
             channel_id = int(existing._mapping["id"])
+            if not tracked:
+                conn.execute(
+                    channel_groups_table.delete().where(
+                        channel_groups_table.c.channel_id == channel_id
+                    )
+                )
             conn.execute(
                 channels_table.update()
                 .where(channels_table.c.id == channel_id)
@@ -199,14 +295,28 @@ class _SyncRepository:
             row = conn.execute(
                 select(channels_table).where(channels_table.c.telegram_id == telegram_id)
             ).first()
-            return _row_to_channel(row) if row is not None else None
+            return _row_to_channel(conn, row) if row is not None else None
 
     def get_channel_by_username(self, username: str) -> Channel | None:
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(channels_table).where(channels_table.c.username == username)
             ).first()
-            return _row_to_channel(row) if row is not None else None
+            return _row_to_channel(conn, row) if row is not None else None
+
+    def list_recent_cached_post_ids(self, channel_id: int, limit: int = 100) -> list[int]:
+        """Return newest cached Telegram message IDs in descending order."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        bounded_limit = min(limit, 100)
+        with self._engine.begin() as conn:
+            rows = conn.execute(
+                select(posts_table.c.telegram_message_id)
+                .where(posts_table.c.channel_id == channel_id)
+                .order_by(posts_table.c.telegram_message_id.desc())
+                .limit(bounded_limit)
+            ).all()
+            return [int(row[0]) for row in rows]
 
     def upsert_posts(self, channel_id: int, messages: Sequence[MessageInfo]) -> int:
         """Insert new messages for a channel; ignore duplicates. Returns inserted count."""
@@ -345,6 +455,7 @@ class _SyncRepository:
         """
         with self._engine.begin() as conn:
             posts_deleted = int(conn.execute(posts_table.delete()).rowcount)
+            conn.execute(channel_groups_table.delete())
             channels_deleted = int(conn.execute(channels_table.delete()).rowcount)
         return {
             "posts_deleted": posts_deleted,
@@ -363,11 +474,26 @@ class Repository:
         info: ChannelInfo,
         *,
         is_tracked: bool = True,
+        groups: str = "",
     ) -> Channel:
-        return await asyncio.to_thread(self._sync.upsert_channel, info, is_tracked=is_tracked)
+        return await asyncio.to_thread(
+            self._sync.upsert_channel,
+            info,
+            is_tracked=is_tracked,
+            groups=groups,
+        )
 
-    async def list_tracked_channels(self) -> list[Channel]:
-        return await asyncio.to_thread(self._sync.list_tracked_channels)
+    async def list_tracked_channels(
+        self,
+        groups: Sequence[str] | str | None = None,
+    ) -> list[Channel]:
+        return await asyncio.to_thread(self._sync.list_tracked_channels, groups)
+
+    async def get_channel_groups(self, channel_id: int) -> tuple[str, ...]:
+        return await asyncio.to_thread(self._sync.get_channel_groups, channel_id)
+
+    async def set_channel_groups(self, telegram_id: int, groups: str) -> Channel | None:
+        return await asyncio.to_thread(self._sync.set_channel_groups, telegram_id, groups)
 
     async def set_tracked(self, telegram_id: int, tracked: bool) -> Channel | None:
         return await asyncio.to_thread(self._sync.set_tracked, telegram_id, tracked)
@@ -384,6 +510,13 @@ class Repository:
         messages: Sequence[MessageInfo],
     ) -> int:
         return await asyncio.to_thread(self._sync.upsert_posts, channel_id, messages)
+
+    async def list_recent_cached_post_ids(self, channel_id: int, limit: int = 100) -> list[int]:
+        return await asyncio.to_thread(
+            self._sync.list_recent_cached_post_ids,
+            channel_id,
+            limit,
+        )
 
     async def update_channel_stats(
         self,
@@ -472,3 +605,20 @@ def _upgrade_schema(engine: Engine) -> None:
             if index_name in existing_indexes:
                 continue
             conn.execute(text(f"CREATE INDEX {index_name} ON {table} ({column})"))
+
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS channel_groups ("
+                "channel_id INTEGER NOT NULL, "
+                "group_name VARCHAR NOT NULL, "
+                "PRIMARY KEY (channel_id, group_name), "
+                "FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_channel_groups_group_name "
+                "ON channel_groups (group_name)"
+            )
+        )
