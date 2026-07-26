@@ -452,7 +452,7 @@ def post_resource(channel: str, post_id: int) -> str:
 @mcp.prompt("channel_digest://{channel}")
 async def channel_digest_prompt(
     ctx: MCPContext,
-    channel: str,
+    channels: str,
     days: int = 7,
 ) -> str:
     """Return a formatted prompt summarizing recent posts from a channel.
@@ -461,9 +461,9 @@ async def channel_digest_prompt(
         channel: Telegram channel identifier (username or numeric id).
         days: Number of days of recent posts to include. Defaults to 7.
     """
-    posts = await list_channel_posts(ctx, channel, days=days)
+    posts = await list_channel_posts(ctx, channels, days=days)
     lines = [f"{post['timestamp_utc']}: {post['text']}" for post in posts]
-    return f"Recent posts from {channel}:\n\n" + "\n\n".join(lines)
+    return f"Recent posts from {channels}:\n\n" + "\n\n".join(lines)
 
 
 def main() -> None:
