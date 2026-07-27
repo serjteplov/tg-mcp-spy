@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -137,6 +138,61 @@ class TestParseBatchIdentifiers:
             _parse_batch_identifiers(" , ,, ,")
         with pytest.raises(ConfigError):
             _parse_batch_identifiers("")
+
+
+class TestJsonDumps:
+    """Tests for _json_dumps helper (non-ASCII encoding in MCP resource handlers)."""
+
+    def test_json_dumps_cyrillic_renders_unencoded(self) -> None:
+        """Cyrillic text appears as raw codepoints, not \\uXXXX escapes."""
+
+        from package_tgmcpspy.server import _json_dumps
+
+        rendered = _json_dumps({"title": "Страхование back-end"})
+
+        assert "Страхование back-end" in rendered
+        assert "\\u" not in rendered
+
+    def test_json_dumps_ascii_matches_stdlib_default(self) -> None:
+        """ASCII output is byte-identical to json.dumps default."""
+        import json
+
+        from package_tgmcpspy.server import _json_dumps
+
+        payload = {"name": "alice", "ids": [1, 2, 3], "ok": True}
+
+        assert _json_dumps(payload) == json.dumps(payload)
+
+    @pytest.mark.parametrize(
+        ("payload", "expected_substring"),
+        [
+            pytest.param({"key": "plain ascii"}, '"plain ascii"', id="plain-ascii"),
+            pytest.param(
+                {"title": "Страхование back-end"},
+                "Страхование back-end",
+                id="cyrillic",
+            ),
+            pytest.param({"emoji": "🚀 launch"}, "🚀 launch", id="emoji"),
+            pytest.param(
+                {"mixed": ["hello", "мир", 42, True, None]},
+                "мир",
+                id="mixed-types",
+            ),
+        ],
+    )
+    def test_json_dumps_output_round_trips_through_json_loads(
+        self,
+        payload: object,
+        expected_substring: str,
+    ) -> None:
+        import json
+
+        from package_tgmcpspy.server import _json_dumps
+
+        rendered = _json_dumps(payload)
+
+        assert expected_substring in rendered
+        assert json.loads(rendered) == payload
 
 
 class TestResolveDbChannel:
@@ -1565,7 +1621,6 @@ class TestStructuredDigestPrompt:
         import package_tgmcpspy.server as server_module
 
         result = await server_module.channel_digest_prompt(
-            None,
             channels="alpha",
             days=5,
         )
@@ -1576,6 +1631,16 @@ class TestStructuredDigestPrompt:
         assert "Normalized groups: (none)." in text
         assert "Normalized channels: alpha." in text
 
+    def test_alias_prompt_trims_channels_argument(self) -> None:
+        """The aliased prompt must normalize surrounding whitespace before delegating."""
+        import asyncio
+
+        import package_tgmcpspy.server as server_module
+
+        result = asyncio.run(server_module.channel_digest_prompt(channels="  alpha  ", days=3))
+        text = _digest_text(result)
+        assert "Normalized channels: alpha." in text
+
     async def test_canonical_prompt_does_not_contact_telegram(
         self, app_context: Any, fake_client: Any
     ) -> None:
@@ -1584,3 +1649,194 @@ class TestStructuredDigestPrompt:
         # Should not raise even though the fake client has no channels.
         messages = _build_digest_user_message("tech", "alpha", 2)
         assert messages[0].role == "user"
+
+
+class TestPromptsPackage:
+    """Tests for the prompts/ subpackage helpers and shared preambles."""
+
+    def test_load_template_returns_prompt_body(self) -> None:
+        from package_tgmcpspy.prompts import load_template
+
+        template = load_template("update_all_channels")
+        assert "update_all_channels" in template
+        assert "ctx parameter" not in template
+
+    def test_load_template_raises_for_missing_file(self, tmp_path: Path) -> None:
+        from package_tgmcpspy import prompts
+
+        original = prompts._PROMPTS_DIR
+        prompts._PROMPTS_DIR = tmp_path
+        try:
+            with pytest.raises(FileNotFoundError):
+                prompts.load_template("does_not_exist")
+        finally:
+            prompts._PROMPTS_DIR = original
+
+    def test_render_prompt_substitutes_simple_placeholders(self) -> None:
+        from package_tgmcpspy.prompts import render_prompt
+
+        rendered = render_prompt("hello $name, $days", name="alice", days=7)
+        # JSON-escape wraps string values in quotes; non-string values pass through.
+        assert rendered == 'hello "alice", 7'
+
+    def test_render_prompt_json_escapes_string_values(self) -> None:
+        from package_tgmcpspy.prompts import render_prompt
+
+        rendered = render_prompt(
+            "person is $person",
+            person='al"ice',
+        )
+        assert '"al\\"ice"' in rendered
+
+    def test_render_prompt_preserves_braces_in_user_input(self) -> None:
+        """``{`` and ``}`` from a user identifier must stay as literal text."""
+        from package_tgmcpspy.prompts import render_prompt
+
+        rendered = render_prompt("a=$a", a="{evil}")
+        assert rendered == 'a="{evil}"'
+
+    def test_render_prompt_leaves_non_string_values_untouched(self) -> None:
+        from package_tgmcpspy.prompts import render_prompt
+
+        rendered = render_prompt("days=$days", days=7)
+        assert rendered == "days=7"
+
+    def test_render_prompt_handles_missing_placeholders_safely(self) -> None:
+        """``safe_substitute`` leaves unknown placeholders intact instead of raising."""
+        from package_tgmcpspy.prompts import render_prompt
+
+        rendered = render_prompt("hello $name, $missing", name="alice")
+        assert rendered == 'hello "alice", $missing'
+
+    def test_shared_preambles_exist_and_are_non_empty(self) -> None:
+        from package_tgmcpspy.prompts import LANGUAGE_POLICY, SAFETY_PREAMBLE, WRITING_STYLE
+
+        for constant in (LANGUAGE_POLICY, SAFETY_PREAMBLE, WRITING_STYLE):
+            assert constant.strip()
+            assert "untrusted data" in constant or "Be concise" in constant or "Russian" in constant
+
+
+class TestNewPromptHandlers:
+    """Tests for update_all_channels_prompt, person_digest_prompt, and consultation_prompt."""
+
+    async def test_update_all_channels_prompt_is_async_and_omits_ctx(self) -> None:
+        from mcp.types import PromptMessage, TextContent
+
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.update_all_channels_prompt()
+        assert isinstance(result, list)
+        assert isinstance(result[0], PromptMessage)
+        text = result[0].content
+        assert isinstance(text, TextContent)
+        assert "update_all_channels" in text.text
+        assert "ctx parameter" not in text.text
+
+    async def test_person_digest_prompt_renders_template_with_preambles(self) -> None:
+        from mcp.types import PromptMessage, TextContent
+
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.person_digest_prompt(person="alice", days=7)
+        assert isinstance(result[0], PromptMessage)
+        text = result[0].content
+        assert isinstance(text, TextContent)
+        assert "Use Russian language only" in text.text
+        assert "untrusted data" in text.text
+        assert '"alice"' in text.text
+        assert "last 7 days" in text.text
+
+    async def test_person_digest_prompt_uses_default_days(self) -> None:
+
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.person_digest_prompt(person="alice")
+        assert "last 7 days" in result[0].content.text
+
+    async def test_person_digest_prompt_returns_friendly_message_for_empty(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.person_digest_prompt(person="   ", days=7)
+        assert "Provide a person" in result[0].content.text
+
+    async def test_person_digest_prompt_empty_check_runs_before_days_validation(self) -> None:
+        """Empty person + invalid days must yield the friendly message, not ConfigError."""
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.person_digest_prompt(person="", days=0)
+        assert "Provide a person" in result[0].content.text
+
+    async def test_person_digest_prompt_invalid_days_raises(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        with pytest.raises(ConfigError):
+            await server_module.person_digest_prompt(person="alice", days=0)
+
+    async def test_person_digest_prompt_json_escapes_dangerous_identifier(self) -> None:
+        """A user identifier containing ``"`` or ``\\`` must not break the prompt."""
+        from mcp.types import TextContent
+
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.person_digest_prompt(
+            person='al"ice',
+            days=3,
+        )
+        text = result[0].content
+        assert isinstance(text, TextContent)
+        assert '\\"ice' in text.text
+
+    async def test_consultation_prompt_renamed_channel_argument(self) -> None:
+        """The handler must accept ``channel`` (not ``conversation``)."""
+        import inspect
+
+        from mcp.types import TextContent
+
+        import package_tgmcpspy.server as server_module
+
+        sig = inspect.signature(server_module.consultation_prompt)
+        assert "channel" in sig.parameters
+        assert "conversation" not in sig.parameters
+
+        result = await server_module.consultation_prompt(channel="dev-team", days=7)
+        text = result[0].content
+        assert isinstance(text, TextContent)
+        assert "Use Russian language only" in text.text
+        assert "untrusted data" in text.text
+        assert "Be concise" in text.text
+        assert '"dev-team"' in text.text
+        assert "last 7 days" in text.text
+
+    async def test_consultation_prompt_uses_default_days(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.consultation_prompt(channel="dev-team")
+        assert "last 7 days" in result[0].content.text
+
+    async def test_consultation_prompt_returns_friendly_message_for_empty(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.consultation_prompt(channel="   ", days=7)
+        assert "Provide a direct-conversation" in result[0].content.text
+
+    async def test_consultation_prompt_empty_check_runs_before_days_validation(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.consultation_prompt(channel="", days=-1)
+        assert "Provide a direct-conversation" in result[0].content.text
+
+    async def test_consultation_prompt_invalid_days_raises(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        with pytest.raises(ConfigError):
+            await server_module.consultation_prompt(channel="dev-team", days=True)
+
+    async def test_consultation_prompt_json_escapes_dangerous_channel(self) -> None:
+        import package_tgmcpspy.server as server_module
+
+        result = await server_module.consultation_prompt(
+            channel='team"x',
+            days=3,
+        )
+        text = result[0].content.text
+        assert '\\"x' in text

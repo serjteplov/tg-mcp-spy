@@ -14,3 +14,4 @@ description: This skill should be used when starting a new feature or
    Requirements with Given/When/Then scenarios.
 5. Write `tasks.md` as a checklist derived from design.md.
 6. Stop and ask the human to review before any implementation.
+7. Create `openspec/changes/<kebab-case-feature-name>/notes/`.

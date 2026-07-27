@@ -32,6 +32,13 @@ from package_tgmcpspy.models import (
     TelegramError,
     normalize_identifier,
 )
+from package_tgmcpspy.prompts import (
+    LANGUAGE_POLICY,
+    SAFETY_PREAMBLE,
+    WRITING_STYLE,
+    load_template,
+    render_prompt,
+)
 from package_tgmcpspy.telegram import TelegramClientWrapper
 
 type MCPContext = Context[Any, AppContext, Any]
@@ -118,6 +125,16 @@ def _post_to_dict(post: Post) -> dict[str, Any]:
     result = asdict(post)
     result["timestamp_utc"] = post.timestamp_utc.isoformat()
     return result
+
+
+def _json_dumps(data: object) -> str:
+    """Serialize for MCP resource handlers.
+
+    ``ensure_ascii=False`` keeps Cyrillic and other non-ASCII text readable in
+    the Inspector instead of rendering as ``\\uXXXX`` escapes. Semantically
+    identical to the stdlib default under ``json.loads``.
+    """
+    return json.dumps(data, ensure_ascii=False)
 
 
 def _parse_utc_datetime(value: str, *, end_of_day: bool = False) -> datetime:
@@ -567,21 +584,21 @@ async def _list_posts_for_resource(
 @mcp.resource("channel://list", mime_type="application/json")
 async def channels_resource() -> str:
     """Return tracked channels as JSON."""
-    return json.dumps(await _list_tracked_channels_resource(_get_app_context()))
+    return _json_dumps(await _list_tracked_channels_resource(_get_app_context()))
 
 
 @mcp.resource("post://{channel}/{post_id}", mime_type="application/json")
 async def post_resource(channel: str, post_id: str) -> str:
     """Return one cached post as JSON."""
     result = await _get_post_for_resource(_get_app_context(), channel, post_id)
-    return json.dumps(result)
+    return _json_dumps(result)
 
 
 @mcp.resource("posts://{channel}/recent/{days}", mime_type="application/json")
 async def recent_posts_resource(channel: str, days: str) -> str:
     """Return recent cached channel posts as JSON."""
     result = await _list_posts_for_resource(_get_app_context(), channel, days=days)
-    return json.dumps(result)
+    return _json_dumps(result)
 
 
 @mcp.resource(
@@ -596,7 +613,7 @@ async def ranged_posts_resource(channel: str, start_date: str, end_date: str) ->
         start_date=start_date,
         end_date=end_date,
     )
-    return json.dumps(result)
+    return _json_dumps(result)
 
 
 def _validate_digest_days(days: int) -> int:
@@ -773,7 +790,6 @@ async def complete(
 
 @mcp.prompt("channel_digest")
 async def channel_digest(
-    ctx: MCPContext,
     groups: str = "",
     channels: str = "",
     days: int = 7,
@@ -786,13 +802,11 @@ async def channel_digest(
     invokes the underlying tools; clients are expected to follow the
     instructions against the locally cached data.
     """
-    del ctx  # unused; retrieval is local-only
     return _build_digest_user_message(groups, channels, days)
 
 
 @mcp.prompt("channel_digest://{channel}")
 async def channel_digest_prompt(
-    ctx: MCPContext,
     channels: str,
     days: int = 7,
 ) -> list[PromptMessage]:
@@ -802,8 +816,84 @@ async def channel_digest_prompt(
     to the canonical builder with ``groups=""`` so legacy clients continue
     to receive structured digest instructions for one channel.
     """
-    del ctx  # unused; retrieval is local-only
-    return _build_digest_user_message("", channels, days)
+    return _build_digest_user_message("", channels.strip(), days)
+
+
+@mcp.prompt(
+    name="update_all_channels_prompt",
+    description=(
+        "Refresh cached data for every tracked Telegram channel using the update_all_channels tool."
+    ),
+)
+async def update_all_channels_prompt() -> list[PromptMessage]:
+    """Return instructions for a full tracked-channel cache refresh.
+
+    The ``update_all_channels`` tool does not require any arguments; the
+    prompt explicitly omits ``ctx`` because MCP prompt handlers no longer
+    need to forward it to the underlying tool.
+    """
+    text = load_template("update_all_channels")
+    return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+
+
+@mcp.prompt("person_digest://{person}")
+async def person_digest_prompt(
+    person: str,
+    days: int = 7,
+) -> list[PromptMessage]:
+    """Return a structured user-role instruction for a direct-chat digest.
+
+    The digest applies only to a one-to-one conversation with ``person`` and
+    uses locally cached data. ``days`` must be a positive non-boolean integer.
+
+    The URI-template-looking name is cosmetic: MCP prompt arguments are
+    passed by name, so ``days`` is delivered as a named argument (default
+    ``7``) rather than as a URL query parameter.
+    """
+    normalized_person = person.strip()
+    if not normalized_person:
+        text = (
+            "Provide a person or direct-conversation identifier to process. "
+            "Do not fall back to all tracked conversations."
+        )
+        return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+
+    validated_days = _validate_digest_days(days)
+    body = render_prompt(
+        load_template("person_digest"), person=normalized_person, days=validated_days
+    )
+    text = "\n\n".join([LANGUAGE_POLICY, SAFETY_PREAMBLE, body])
+    return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+
+
+@mcp.prompt("consultation://{channel}")
+async def consultation_prompt(
+    channel: str,
+    days: int = 7,
+) -> list[PromptMessage]:
+    """Build a senior-architect consultation prompt for a cached Telegram chat.
+
+    ``channel`` may identify a one-to-one or group conversation. ``days``
+    must be a positive non-boolean integer.
+
+    The URI-template-looking name is cosmetic: MCP prompt arguments are
+    passed by name, so ``days`` is delivered as a named argument (default
+    ``7``) rather than as a URL query parameter.
+    """
+    normalized_channel = channel.strip()
+    if not normalized_channel:
+        text = (
+            "Provide a direct-conversation or group-chat identifier to consult. "
+            "Do not fall back to all tracked conversations."
+        )
+        return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
+
+    validated_days = _validate_digest_days(days)
+    body = render_prompt(
+        load_template("consultation"), channel=normalized_channel, days=validated_days
+    )
+    text = "\n\n".join([LANGUAGE_POLICY, SAFETY_PREAMBLE, body, WRITING_STYLE])
+    return [PromptMessage(role="user", content=TextContent(type="text", text=text))]
 
 
 def main() -> None:
