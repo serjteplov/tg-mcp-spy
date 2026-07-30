@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import FastMCP
 from mcp.types import (
     Completion,
     CompletionArgument,
@@ -41,8 +41,6 @@ from package_tgmcpspy.prompts import (
 )
 from package_tgmcpspy.telegram import TelegramClientWrapper
 
-type MCPContext = Context[Any, AppContext, Any]
-
 
 @dataclass(frozen=True)
 class AppContext:
@@ -57,9 +55,9 @@ class AppContext:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-# Bound by ``app_lifespan`` so tools can reach the AppContext without going
-# through ``ctx.request_context``, which is broken on mcp 1.28.x (FastMCP
-# swallows the underlying ``LookupError`` in ``get_context`` and hands tools
+# Bound by ``app_lifespan`` so handlers can reach the AppContext without going
+# through FastMCP's request context, which is broken on mcp 1.28.x (FastMCP
+# swallows the underlying ``LookupError`` in ``get_context`` and hands handlers
 # a Context whose ``_request_context`` is ``None``).
 _app_context: AppContext | None = None
 
@@ -97,20 +95,6 @@ def _get_app_context() -> AppContext:
     if _app_context is None:
         raise RuntimeError("Server lifespan has not started.")
     return _app_context
-
-
-def _context(ctx: MCPContext) -> AppContext:
-    """Return the AppContext bound by ``app_lifespan``.
-
-    The ``ctx`` parameter is intentionally unused. On mcp 1.28.x FastMCP
-    catches the ``LookupError`` from ``self._mcp_server.request_context``
-    inside ``get_context()`` and hands tools a ``Context`` whose
-    ``_request_context`` is ``None``, which makes every access via
-    ``ctx.request_context.lifespan_context`` raise "Context is not available
-    outside of a request" (reproducible on both SSE and stdio paths).
-    """
-    del ctx  # unused; see docstring
-    return _get_app_context()
 
 
 def _channel_to_dict(channel: Channel) -> dict[str, Any]:
@@ -265,7 +249,6 @@ def _canonical_identifier(channel: Channel) -> str:
 
 @mcp.tool()
 async def list_tracked_channels(
-    ctx: MCPContext,
     groups: str = "",
 ) -> list[dict[str, Any]]:
     """List all locally tracked channels, optionally filtered by group intersection.
@@ -274,19 +257,18 @@ async def list_tracked_channels(
     when their ``groups`` field intersects the requested labels. An empty
     ``groups`` argument returns every tracked conversation.
     """
-    app = _context(ctx)
+    app = _get_app_context()
     channels = await app.repo.list_tracked_channels(groups=groups)
     return [_channel_to_dict(channel) for channel in channels]
 
 
 @mcp.tool()
 async def add_channel(
-    ctx: MCPContext,
     channel: str,
     groups: str = "",
 ) -> dict[str, Any]:
     """Add a channel to the local tracked list."""
-    app = _context(ctx)
+    app = _get_app_context()
     async with app.lock:
         info = await app.client.resolve_identifier(channel)
         stored = await app.repo.upsert_channel(info, is_tracked=True, groups=groups)
@@ -295,12 +277,11 @@ async def add_channel(
 
 @mcp.tool()
 async def add_channel_batch(
-    ctx: MCPContext,
     channels: str,
     groups: str = "",
 ) -> list[dict[str, Any]]:
     """Add multiple channels to the local tracked list from a comma-separated string."""
-    app = _context(ctx)
+    app = _get_app_context()
     identifiers = _parse_batch_identifiers(channels)
 
     results: list[dict[str, Any]] = []
@@ -330,12 +311,11 @@ async def add_channel_batch(
 
 @mcp.tool()
 async def set_channel_groups(
-    ctx: MCPContext,
     channel: str,
     groups: str = "",
 ) -> dict[str, Any]:
     """Replace local group memberships for a tracked channel."""
-    app = _context(ctx)
+    app = _get_app_context()
     async with app.lock:
         cached = await _resolve_local_channel(app, channel)
         if not cached.is_tracked:
@@ -347,9 +327,9 @@ async def set_channel_groups(
 
 
 @mcp.tool()
-async def remove_channel(ctx: MCPContext, channel: str) -> dict[str, Any]:
+async def remove_channel(channel: str) -> dict[str, Any]:
     """Remove a channel from the local tracked list."""
-    app = _context(ctx)
+    app = _get_app_context()
     parsed = normalize_identifier(channel)
 
     stored: Channel | None = None
@@ -368,9 +348,9 @@ async def remove_channel(ctx: MCPContext, channel: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def add_channel_all(ctx: MCPContext) -> dict[str, Any]:
+async def add_channel_all() -> dict[str, Any]:
     """Add every Telegram dialog to the local tracked list."""
-    app = _context(ctx)
+    app = _get_app_context()
     async with app.lock:
         dialogs = await app.client.get_dialogs()
         synced = []
@@ -382,7 +362,6 @@ async def add_channel_all(ctx: MCPContext) -> dict[str, Any]:
 
 @mcp.tool()
 async def remove_all_channels(
-    ctx: MCPContext,
     confirm: bool = False,
 ) -> dict[str, int]:
     """Permanently remove every locally cached conversation, post, and update cursor.
@@ -391,7 +370,7 @@ async def remove_all_channels(
     any database or Telegram I/O. The operation is transactional and returns
     deletion counts. Telegram memberships and subscriptions are unchanged.
     """
-    app = _context(ctx)
+    app = _get_app_context()
     if confirm is not True:
         raise ConfigError("remove_all_channels requires confirm=True; no data was deleted.")
     async with app.lock:
@@ -400,7 +379,6 @@ async def remove_all_channels(
 
 @mcp.tool()
 async def trash_all_messages(
-    ctx: MCPContext,
     confirm: bool = False,
 ) -> dict[str, int]:
     """Trash every locally cached conversation, post, and update cursor.
@@ -409,7 +387,7 @@ async def trash_all_messages(
     full-reset behavior as ``remove_all_channels``. Requires ``confirm=True``;
     any other value raises ``ConfigError`` before any database or Telegram I/O.
     """
-    app = _context(ctx)
+    app = _get_app_context()
     if confirm is not True:
         raise ConfigError("trash_all_messages requires confirm=True; no data was deleted.")
     async with app.lock:
@@ -448,17 +426,17 @@ async def _update_channel(app: AppContext, identifier: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def update_channel(ctx: MCPContext, channel: str) -> dict[str, Any]:
+async def update_channel(channel: str) -> dict[str, Any]:
     """Fetch latest posts for a single channel."""
-    app = _context(ctx)
+    app = _get_app_context()
     async with app.lock:
         return await _update_channel(app, channel)
 
 
 @mcp.tool()
-async def update_all_channels(ctx: MCPContext) -> dict[str, Any]:
+async def update_all_channels() -> dict[str, Any]:
     """Fetch latest posts for all tracked channels."""
-    app = _context(ctx)
+    app = _get_app_context()
     async with app.lock:
         channels = await app.repo.list_tracked_channels()
         results: list[dict[str, Any]] = []
@@ -476,9 +454,9 @@ async def update_all_channels(ctx: MCPContext) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_post(ctx: MCPContext, channel: str, post_id: int) -> dict[str, Any]:
+async def get_post(channel: str, post_id: int) -> dict[str, Any]:
     """Get a specific cached post by channel and post id."""
-    app = _context(ctx)
+    app = _get_app_context()
     db_channel = await _resolve_db_channel(app, channel)
     post = await app.repo.get_post(db_channel.id, post_id)
     if post is None:
@@ -488,7 +466,6 @@ async def get_post(ctx: MCPContext, channel: str, post_id: int) -> dict[str, Any
 
 @mcp.tool()
 async def list_channel_posts(
-    ctx: MCPContext,
     channel: str,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -500,7 +477,7 @@ async def list_channel_posts(
     or ``days`` as a positive integer for an inclusive rolling UTC interval
     ending now. The two modes cannot be combined.
     """
-    app = _context(ctx)
+    app = _get_app_context()
     db_channel = await _resolve_db_channel(app, channel)
     start, end = _resolve_post_range(start_date=start_date, end_date=end_date, days=days)
     posts = await app.repo.list_channel_posts(db_channel.id, start, end)
@@ -509,12 +486,11 @@ async def list_channel_posts(
 
 @mcp.tool()
 async def list_all_posts(
-    ctx: MCPContext,
     start_date: str,
     end_date: str,
 ) -> list[dict[str, Any]]:
     """List cached posts from all tracked channels within a UTC date range."""
-    app = _context(ctx)
+    app = _get_app_context()
     start, end = _parse_date_range(start_date, end_date)
     channels = await app.repo.list_tracked_channels()
 

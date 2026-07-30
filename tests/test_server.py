@@ -1137,19 +1137,12 @@ def _app_context_with_backfill(
 
 
 async def _call_tool(app: Any, tool_name: str, **kwargs: object) -> Any:
-    """Call a server tool function by name, injecting the app context."""
+    """Call a server tool function by name with the app context bound globally."""
     import package_tgmcpspy.server as server_module
 
-    class _FakeRequestContext:
-        lifespan_context = app
-
-    class _FakeCtx:
-        request_context = _FakeRequestContext()
-
-    ctx = _FakeCtx()
-
+    server_module._app_context = app
     tool_fn = getattr(server_module, tool_name)
-    return await tool_fn(ctx, **kwargs)
+    return await tool_fn(**kwargs)
 
 
 class TestChannelGroupsTools:
